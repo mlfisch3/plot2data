@@ -126,3 +126,12 @@ describe('parseOffsetAnnotation', () => {
     expect(parseOffsetAnnotation('')).toBeNull();
   });
 });
+
+describe('parseLabel decimal handling', () => {
+  it('never reads a lone period as a thousands separator', () => {
+    expect(parseLabel('0.001')?.value).toBeCloseTo(0.001, 15);
+    expect(parseLabel('0.01')?.value).toBeCloseTo(0.01, 15);
+    expect(parseLabel('1.000')?.value).toBeCloseTo(1, 15);
+    expect(parseLabel('2.500')?.value).toBeCloseTo(2.5, 15);
+  });
+});

@@ -117,6 +117,8 @@ export interface ScaleFitReport {
   logResidual: number | null;
   /** Number of labelled ticks the comparison used. */
   samples: number;
+  /** Labels discarded as misreads before the final fit. */
+  droppedLabels: number;
   chosen: AxisScale;
   /** True when the residuals were too close to call and linear was assumed. */
   ambiguous: boolean;

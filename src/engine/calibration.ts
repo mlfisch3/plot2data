@@ -40,6 +40,8 @@ export interface AxisFit {
   /** Residual as a fraction of the full data range across the fitted pixels. */
   relativeResidual: number;
   samples: number;
+  /** Labels discarded as misreads before the final fit. */
+  dropped: FitSample[];
 }
 
 function leastSquares(samples: FitSample[], transform: (v: number) => number): AxisFit | null {
@@ -80,7 +82,48 @@ function leastSquares(samples: FitSample[], transform: (v: number) => number): A
     residual,
     relativeResidual: spanValue > 0 ? residual / spanValue : Infinity,
     samples: n,
+    dropped: [],
   };
+}
+
+/**
+ * Least squares with misread-label rejection.
+ *
+ * OCR gets a label wrong now and then - `0.1` read as `1` is a whole decade -
+ * and one bad label drags a plain least-squares fit off for every point. A
+ * label whose residual dwarfs the rest is not evidence about the axis, it is a
+ * misread, so drop it and refit. What was dropped is reported, never hidden.
+ */
+function robustLeastSquares(
+  samples: FitSample[],
+  transform: (v: number) => number,
+): AxisFit | null {
+  let working = [...samples];
+  const dropped: FitSample[] = [];
+  let fit = leastSquares(working, transform);
+  if (!fit) return null;
+
+  for (let pass = 0; pass < 3 && working.length > 3; pass++) {
+    const residuals = working.map((s) =>
+      Math.abs(transform(s.value) - (fit!.slope * s.px + fit!.intercept)),
+    );
+    const sorted = [...residuals].sort((a, b) => a - b);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    let worstIdx = 0;
+    for (let i = 1; i < residuals.length; i++) if (residuals[i] > residuals[worstIdx]) worstIdx = i;
+    const worst = residuals[worstIdx];
+    // Needs to be both far outside the pack and materially large in absolute
+    // terms, so that a clean fit with tiny rounding noise is left alone.
+    const spanPx = Math.max(...working.map((s) => s.px)) - Math.min(...working.map((s) => s.px));
+    const spanValue = Math.abs(fit.slope * spanPx);
+    if (!(worst > Math.max(med * 6, spanValue * 0.015))) break;
+    dropped.push(working[worstIdx]);
+    working = working.filter((_, i) => i !== worstIdx);
+    const refit = leastSquares(working, transform);
+    if (!refit) break;
+    fit = refit;
+  }
+  return { ...fit, dropped };
 }
 
 /**
@@ -91,11 +134,11 @@ function leastSquares(samples: FitSample[], transform: (v: number) => number): A
  * toggle prominent in that state.
  */
 export function fitAxis(samples: FitSample[]): { fit: AxisFit; report: ScaleFitReport } | null {
-  const linear = leastSquares(samples, (v) => v);
+  const linear = robustLeastSquares(samples, (v) => v);
   if (!linear) return null;
 
   const positive = samples.every((s) => s.value > 0);
-  const log = positive ? leastSquares(samples, (v) => Math.log10(v)) : null;
+  const log = positive ? robustLeastSquares(samples, (v) => Math.log10(v)) : null;
 
   if (samples.length < 3 || !log) {
     return {
@@ -104,6 +147,7 @@ export function fitAxis(samples: FitSample[]): { fit: AxisFit; report: ScaleFitR
         linearResidual: linear.relativeResidual,
         logResidual: log ? log.relativeResidual : null,
         samples: samples.length,
+        droppedLabels: linear.dropped.length,
         chosen: 'linear',
         ambiguous: samples.length < 3,
       },
@@ -123,6 +167,7 @@ export function fitAxis(samples: FitSample[]): { fit: AxisFit; report: ScaleFitR
       linearResidual: linear.relativeResidual,
       logResidual: log.relativeResidual,
       samples: samples.length,
+      droppedLabels: winner.dropped.length,
       chosen,
       ambiguous,
     },
@@ -182,7 +227,7 @@ export function calibrateAxis(
 
   let fit = fitted.fit;
   if (override?.scale && override.scale !== fit.scale) {
-    const refit = leastSquares(
+    const refit = robustLeastSquares(
       samples,
       override.scale === 'log' ? (v) => Math.log10(v) : (v) => v,
     );

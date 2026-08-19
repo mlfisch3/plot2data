@@ -78,19 +78,28 @@ function normaliseDashes(text: string): string {
  * pattern repeats.
  */
 function stripGroupSeparators(text: string): string {
-  let s = text.replace(/['’]/g, '').replace(/(\d) (?=\d{3}\b)/g, '$1');
-  // Comma or period used as a repeated group separator: 1,234,567 / 1.234.567
-  if (/^-?\d{1,3}([.,]\d{3})+$/.test(s)) return s.replace(/[.,]/g, '');
-  // Mixed form: 1.234,56 (EU) or 1,234.56 (US) - the last separator is decimal.
-  const mixed = /^-?\d{1,3}(?:([.,])\d{3})+([.,])\d+$/.exec(s);
-  if (mixed && mixed[1] !== mixed[2]) {
-    return s.split(mixed[1]).join('').replace(mixed[2], '.');
+  const s = text.replace(/['’]/g, '').replace(/(\d) (?=\d{3}\b)/g, '$1');
+  const dots = (s.match(/\./g) ?? []).length;
+  const commas = (s.match(/,/g) ?? []).length;
+
+  // Both separators present: the last one is the decimal point (1.234,56 or
+  // 1,234.56), the other groups digits.
+  if (dots > 0 && commas > 0) {
+    const lastDot = s.lastIndexOf('.');
+    const lastComma = s.lastIndexOf(',');
+    const decimal = lastDot > lastComma ? '.' : ',';
+    const group = decimal === '.' ? ',' : '.';
+    return s.split(group).join('').replace(decimal, '.');
   }
-  // Lone comma with a non-3-digit tail is a decimal comma: 1,5 or 0,25
-  if (/^-?\d+,\d{1,2}$/.test(s) || /^-?\d+,\d{4,}$/.test(s)) return s.replace(',', '.');
-  // Lone comma with exactly 3 trailing digits is ambiguous; treat as a group
-  // separator, which is overwhelmingly the more common intent on chart axes.
-  if (/^-?\d+,\d{3}$/.test(s)) return s.replace(',', '');
+  // Repeated separator: it must be grouping digits.
+  if (dots > 1) return s.split('.').join('');
+  if (commas > 1) return s.split(',').join('');
+  // A lone period is a decimal point. `0.001` is one thousandth, never one.
+  if (dots === 1) return s;
+  // A lone comma followed by exactly three digits is a group separator on a
+  // chart axis far more often than it is a decimal comma; anything else is a
+  // decimal comma.
+  if (commas === 1) return /,\d{3}$/.test(s) ? s.replace(',', '') : s.replace(',', '.');
   return s;
 }
 

@@ -335,7 +335,7 @@ function chooseMergeGap(present: Int32Array): number {
  * Group the ink inside the label band into text blobs and take each blob's
  * bounding-box centre as a tick position.
  */
-function detectLabelGroups(
+export function findLabelBlobs(
   img: ImageBuffer,
   frame: PlotFrame,
   side: AxisSide,
@@ -455,7 +455,7 @@ export function detectTicks(
   if (!band) {
     return { side, ticks: [], direction, tickLength: 0, spinePos, source: 'ticks', labelBand: null };
   }
-  const groups = keepRegular(detectLabelGroups(img, frame, side, band, opts));
+  const groups = keepRegular(findLabelBlobs(img, frame, side, band, opts));
   return {
     side,
     ticks: groups.map(({ px, length, major }) => ({ px, length, major })),
