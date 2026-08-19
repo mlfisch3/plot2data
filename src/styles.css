@@ -19,6 +19,18 @@
   --warn-text: #7a4a06;
   --radius: 10px;
   --tap: 44px;
+
+  /* Window insets. The browser fills these from the safe-area values; the
+     Android shell overwrites them on documentElement with the real ones,
+     because a WebView does not populate env() reliably. */
+  --inset-top: env(safe-area-inset-top, 0px);
+  --inset-right: env(safe-area-inset-right, 0px);
+  --inset-bottom: env(safe-area-inset-bottom, 0px);
+  --inset-left: env(safe-area-inset-left, 0px);
+  /* Display corner radius. A rounded corner clips the ends of a full-width row
+     even where no inset is reported, so it widens the side gutters. */
+  --inset-corner: 0px;
+  --gutter: max(12px, calc(var(--inset-corner) * 0.3));
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 18px rgba(16, 24, 40, 0.06);
 }
 
@@ -57,12 +69,17 @@ body {
   color: var(--text);
   font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;
+  /* No rubber-band chaining to whatever is behind the page. */
+  overscroll-behavior-y: contain;
 }
 
 #app {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 0 12px calc(20px + env(safe-area-inset-bottom));
+  padding-top: var(--inset-top);
+  padding-right: calc(var(--inset-right) + var(--gutter));
+  padding-bottom: calc(20px + var(--inset-bottom));
+  padding-left: calc(var(--inset-left) + var(--gutter));
 }
 
 /* ---------- header ---------- */
@@ -87,6 +104,17 @@ body {
   font-size: 13px;
 }
 
+/* On a phone held in portrait the tagline costs two lines of a short screen and
+   says nothing the drop zone below it does not. */
+@media (max-width: 560px) {
+  .masthead {
+    padding: 10px 2px 8px;
+  }
+  .masthead p {
+    display: none;
+  }
+}
+
 /* ---------- layout ---------- */
 
 .layout {
@@ -109,7 +137,7 @@ body {
   }
   .layout > .stage-column {
     position: sticky;
-    top: 12px;
+    top: calc(var(--inset-top) + 12px);
   }
 }
 
@@ -222,6 +250,18 @@ body {
   min-width: 0;
 }
 
+/* Four buttons and a filename do not fit one phone-width row. Give the name its
+   own line rather than letting the buttons shrink below their tap target. */
+@media (max-width: 560px) {
+  .stage-bar .filename {
+    flex: 1 0 100%;
+  }
+  .stage-bar button {
+    flex: 1 1 auto;
+    padding: 0 12px;
+  }
+}
+
 /* ---------- controls ---------- */
 
 button {
@@ -233,11 +273,20 @@ button {
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  /* No waiting to see whether a tap was the first half of a double-tap. */
+  touch-action: manipulation;
+  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
 }
 
 button:hover:not(:disabled) {
   background: var(--surface-2);
+}
+
+/* A finger has no hover. Without an :active state a tap gives no feedback at all
+   until the app has finished whatever it was asked to do. */
+button:active:not(:disabled) {
+  background: var(--border);
+  transform: translateY(1px);
 }
 
 button:disabled {
@@ -256,6 +305,11 @@ button.primary:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
+button.primary:active:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(0.9);
+}
+
 button.wide {
   width: 100%;
 }
@@ -263,7 +317,10 @@ button.wide {
 input[type='text'],
 input[type='number'],
 select {
+  /* 16px, not `inherit`: a mobile browser zooms the whole page when a field
+     smaller than that takes focus, and the layout never comes back cleanly. */
   font: inherit;
+  font-size: max(16px, 1em);
   min-height: var(--tap);
   width: 100%;
   padding: 0 10px;
@@ -271,6 +328,14 @@ select {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
+  touch-action: manipulation;
+}
+
+input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+  flex: none;
 }
 
 input:focus-visible,
@@ -413,13 +478,6 @@ label {
   border-bottom: none;
 }
 
-.series-row input[type='checkbox'] {
-  width: 22px;
-  height: 22px;
-  accent-color: var(--accent);
-  flex: none;
-}
-
 .swatch {
   width: 18px;
   height: 18px;
@@ -441,6 +499,70 @@ label {
   font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
+}
+
+/* Numbered walkthrough on the empty state. */
+.steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+/* "Apply the 1e6 annotation" and friends: a full-width tap target, not a label
+   with a checkbox somewhere near it. */
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+  min-height: var(--tap);
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+/* Several images shared at once. */
+.choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+  padding: 8px;
+  height: auto;
+  text-align: left;
+  overflow: hidden;
+}
+
+.choice img {
+  display: block;
+  width: 100%;
+  height: 96px;
+  object-fit: contain;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+
+.choice span {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-row {
+  margin-top: 12px;
+}
+
+.export-row button {
+  flex: 1 1 150px;
 }
 
 .row {
@@ -503,4 +625,23 @@ label {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* A phone in landscape has half the height and twice the width. Trim the
+   vertical chrome so the plot itself still gets most of the screen. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .card {
+    padding: 11px;
+    margin-bottom: 10px;
+  }
+  .masthead {
+    padding: 6px 2px;
+  }
+  .dropzone {
+    min-height: 160px;
+    padding: 18px;
+  }
+  .preview {
+    max-height: 130px;
+  }
 }

@@ -5,7 +5,8 @@
 
 import type { ImageBuffer, Rect } from '../engine/types.ts';
 
-export const ACCEPTED = ['image/png', 'image/jpeg'];
+/** What the file picker advertises. Decoding is what actually decides. */
+export const ACCEPT_ATTRIBUTE = 'image/*';
 
 export interface LoadedImage {
   buffer: ImageBuffer;
@@ -14,10 +15,17 @@ export interface LoadedImage {
 }
 
 export async function loadImageFile(file: File): Promise<LoadedImage> {
-  if (!ACCEPTED.includes(file.type)) {
-    throw new Error(`Unsupported file type "${file.type || 'unknown'}". Use PNG or JPEG.`);
+  // Decode first and complain afterwards. A file arriving from a share sheet,
+  // a clipboard or a screenshot tool often carries no type at all or a wildcard
+  // one, and refusing on the label would reject images the platform can read
+  // perfectly well.
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    const label = file.type || 'unknown type';
+    throw new Error(`That file could not be read as an image (${label}). Use a PNG or JPEG screenshot.`);
   }
-  const bitmap = await createImageBitmap(file);
   const canvas = document.createElement('canvas');
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
@@ -32,17 +40,19 @@ export async function loadImageFile(file: File): Promise<LoadedImage> {
   };
 }
 
-/** First PNG or JPEG found in a drop or paste event. */
+/** First image found in a drop or paste event. */
 export function fileFromTransfer(items: DataTransferItemList | null, files: FileList | null): File | null {
+  const isImage = (file: File | null): file is File =>
+    file !== null && (file.type.startsWith('image/') || file.type === '');
   if (items) {
     for (const item of Array.from(items)) {
       if (item.kind !== 'file') continue;
       const file = item.getAsFile();
-      if (file && ACCEPTED.includes(file.type)) return file;
+      if (isImage(file)) return file;
     }
   }
   if (files) {
-    for (const file of Array.from(files)) if (ACCEPTED.includes(file.type)) return file;
+    for (const file of Array.from(files)) if (isImage(file)) return file;
   }
   return null;
 }

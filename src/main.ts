@@ -4,6 +4,11 @@
  * A thin layer over `src/engine`: it loads pixels, lets the user crop, runs the
  * engine once, and then re-applies the calibration on every edit. All of the
  * numerical work lives in the engine, which knows nothing about the DOM.
+ *
+ * The same page runs in a browser tab and inside the Android shell. The three
+ * differences a phone forces - an image arriving from a share sheet, a back
+ * button that has to mean something, and a CSV that cannot simply be
+ * "downloaded" - are handled here and in `ui/android.ts`, not by a second app.
  */
 
 import './styles.css';
@@ -24,8 +29,16 @@ import {
 } from './engine/index.ts';
 import { calibrateAxis } from './engine/calibration.ts';
 import { BrowserOcr } from './ui/ocr.ts';
-import { cropBuffer, downloadText, fileFromTransfer, loadImageFile } from './ui/image-io.ts';
+import { ACCEPT_ATTRIBUTE, cropBuffer, fileFromTransfer, loadImageFile } from './ui/image-io.ts';
 import { Stage, cssColour, type AnchorId } from './ui/stage.ts';
+import {
+  canShareCsv,
+  exportCsv,
+  fetchIncoming,
+  installHost,
+  onAndroid,
+  type IncomingImage,
+} from './ui/android.ts';
 
 type Phase = 'empty' | 'cropping' | 'working' | 'ready';
 
@@ -46,6 +59,10 @@ interface State {
   modeOverride: 'auto' | 'curve' | 'marker';
   busyMessage: string;
   error: string | null;
+  /** More than one image was shared at once and the user has to pick. */
+  choices: IncomingImage[];
+  /** Id of the shared image the shell holds, so a restart can restore it. */
+  token: string | null;
 }
 
 const state: State = {
@@ -65,6 +82,8 @@ const state: State = {
   modeOverride: 'auto',
   busyMessage: '',
   error: null,
+  choices: [],
+  token: null,
 };
 
 const ocr = new BrowserOcr();
@@ -73,7 +92,7 @@ const app = document.getElementById('app')!;
 app.innerHTML = `
   <header class="masthead">
     <h1>plot2data</h1>
-    <p>Read the numbers back out of a plot image. Everything runs in this browser; nothing is uploaded.</p>
+    <p>Read the numbers back out of a plot image. Everything runs on this device; nothing is uploaded.</p>
   </header>
   <div class="layout">
     <div class="stage-column">
@@ -82,6 +101,7 @@ app.innerHTML = `
         <canvas id="stage" aria-label="Plot image with crop and calibration overlay"></canvas>
         <div class="stage-bar">
           <span class="filename" id="filename"></span>
+          <button id="fit" hidden>Fit</button>
           <button id="reset">New image</button>
           <button id="recrop" hidden>Adjust crop</button>
           <button id="extract" class="primary" hidden>Extract data</button>
@@ -99,16 +119,153 @@ const filenameEl = document.getElementById('filename')!;
 const extractBtn = document.getElementById('extract') as HTMLButtonElement;
 const recropBtn = document.getElementById('recrop') as HTMLButtonElement;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement;
+const fitBtn = document.getElementById('fit') as HTMLButtonElement;
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement, {
   onCropChange(rect) {
     state.crop = rect;
     stage.setImage(state.fullBitmap, rect);
+    scheduleSave();
   },
   onAnchorChange(id, px) {
     applyAnchorPixel(id, px);
   },
+  onViewChange(zoomed) {
+    fitBtn.hidden = !zoomed;
+  },
 });
+
+/* ------------------------------------------------------------------ steps */
+
+/**
+ * Each step of the workflow is a history entry.
+ *
+ * That is what makes the Android back button navigate the app rather than close
+ * it: the shell calls `goBack()` whenever the WebView has history, and these are
+ * the entries it walks. It costs nothing in a browser, where the same presses
+ * now step back through the workflow too.
+ */
+let depth = 0;
+
+function replaceStep(phase: Phase): void {
+  history.replaceState({ p: phase, d: depth }, '');
+}
+
+function pushStep(phase: Phase): void {
+  depth += 1;
+  history.pushState({ p: phase, d: depth }, '');
+}
+
+window.addEventListener('popstate', (event) => {
+  const entry = event.state as { p?: Phase; d?: number } | null;
+  depth = entry?.d ?? 0;
+  applyStep(entry?.p ?? 'empty');
+});
+
+/** Move to the step the history says we are on, degrading if it is no longer reachable. */
+function applyStep(phase: Phase): void {
+  if (phase === 'ready' && state.analysis) {
+    state.phase = 'ready';
+    stage.setImage(state.croppedBitmap, null);
+    stage.setAnalysis(state.analysis, state.calibration, state.visible);
+    render();
+    stage.resize();
+    return;
+  }
+  if ((phase === 'cropping' || phase === 'ready' || phase === 'working') && state.fullBitmap) {
+    showCropping();
+    return;
+  }
+  clearImage();
+}
+
+function showCropping(): void {
+  state.phase = 'cropping';
+  state.analysis = null;
+  state.calibration = null;
+  stage.setImage(state.fullBitmap, state.crop);
+  render();
+  stage.resize();
+}
+
+function clearImage(): void {
+  state.phase = 'empty';
+  state.full = null;
+  state.fullBitmap = null;
+  state.cropped = null;
+  state.croppedBitmap = null;
+  state.analysis = null;
+  state.calibration = null;
+  state.crop = null;
+  state.token = null;
+  state.fileName = '';
+  state.choices = [];
+  forgetSession();
+  stage.setImage(null, null);
+  render();
+}
+
+/* ---------------------------------------------------------------- session */
+
+/**
+ * Enough state to survive the app's process being killed.
+ *
+ * Android will kill a backgrounded app whenever it wants the memory, and the
+ * shell hands the image back on restart. What it cannot hand back is the crop
+ * the user had already dragged, so that is kept here, keyed to the image so it
+ * is never applied to a different one.
+ */
+const SESSION_KEY = 'plot2data.session';
+
+interface SavedSession {
+  token: string;
+  crop: Rect;
+  modeOverride: State['modeOverride'];
+  resample: State['resample'];
+  count: number;
+}
+
+let saveTimer: number | undefined;
+
+function scheduleSave(): void {
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveSession, 400);
+}
+
+function saveSession(): void {
+  if (!state.token || !state.crop) return;
+  const payload: SavedSession = {
+    token: state.token,
+    crop: state.crop,
+    modeOverride: state.modeOverride,
+    resample: state.resample,
+    count: state.count,
+  };
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+  } catch {
+    // Storage being unavailable costs a crop rectangle, nothing more.
+  }
+}
+
+function readSession(token: string): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SavedSession;
+    return parsed && parsed.token === token && parsed.crop ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function forgetSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Nothing to do; the next save will overwrite it anyway.
+  }
+}
 
 /* ---------------------------------------------------------------- intake */
 
@@ -121,13 +278,25 @@ function renderIntake(): void {
   }
   intake.hidden = false;
   stageWrap.hidden = true;
+
+  if (state.choices.length > 1) {
+    renderChooser();
+    return;
+  }
+
   intake.innerHTML = `
     <div class="dropzone" id="dropzone">
-      <input type="file" id="file" accept="image/png,image/jpeg" class="file-input"
-        aria-label="Choose a PNG or JPEG plot image" />
-      <p><strong>Drop a plot image here</strong></p>
-      <span class="pseudo-button">Choose a PNG or JPEG</span>
-      <p class="hint">or paste one from the clipboard (${navigator.userAgent.includes('Mac') ? '\u2318' : 'Ctrl'}+V)</p>
+      <input type="file" id="file" accept="${ACCEPT_ATTRIBUTE}" class="file-input"
+        aria-label="Choose a plot image" />
+      <p><strong>${onAndroid ? 'Choose a plot image' : 'Drop a plot image here'}</strong></p>
+      <span class="pseudo-button">Browse images</span>
+      ${
+        onAndroid
+          ? `<p class="hint">Or crop a plot with the S Pen's Smart Select and share it to plot2data.</p>`
+          : `<p class="hint">or paste one from the clipboard (${
+              navigator.userAgent.includes('Mac') ? '⌘' : 'Ctrl'
+            }+V)</p>`
+      }
       <p class="hint">Works best on a clean line or scatter plot with straight axes. Crop to a single plot first.</p>
     </div>
     ${state.error ? `<div class="notice error">${escapeHtml(state.error)}</div>` : ''}
@@ -149,25 +318,97 @@ function renderIntake(): void {
   }
 }
 
-async function accept(file: File): Promise<void> {
+/** Several images were shared at once; the app does one plot at a time. */
+function renderChooser(): void {
+  intake.innerHTML = `
+    <div class="card">
+      <h2>Which plot?</h2>
+      <p class="status" style="margin-top:0">${state.choices.length} images were shared. Pick the one to read.</p>
+      <div class="choices">
+        ${state.choices
+          .map(
+            (image, i) => `
+          <button class="choice" data-pick="${i}">
+            <img src="${escapeHtml(image.url)}" alt="" />
+            <span>${escapeHtml(image.name)}</span>
+          </button>`,
+          )
+          .join('')}
+      </div>
+    </div>
+    ${state.error ? `<div class="notice error">${escapeHtml(state.error)}</div>` : ''}
+  `;
+  for (const button of Array.from(intake.querySelectorAll<HTMLButtonElement>('[data-pick]'))) {
+    button.addEventListener('click', () => {
+      const picked = state.choices[Number(button.dataset.pick)];
+      state.choices = [];
+      void takeIncoming(picked);
+    });
+  }
+}
+
+async function accept(file: File, incoming?: IncomingImage): Promise<void> {
   state.error = null;
   try {
     const loaded = await loadImageFile(file);
+    const restored = incoming ? readSession(incoming.token) : null;
     state.full = loaded.buffer;
     state.fullBitmap = loaded.bitmap;
     state.fileName = loaded.name;
-    state.crop = { x0: 0, y0: 0, x1: loaded.buffer.width - 1, y1: loaded.buffer.height - 1 };
+    state.token = incoming?.token ?? null;
+    state.crop = clampCrop(restored?.crop, loaded.buffer);
+    if (restored) {
+      state.modeOverride = restored.modeOverride;
+      state.resample = restored.resample;
+      state.count = restored.count;
+    }
     state.analysis = null;
     state.calibration = null;
-    state.phase = 'cropping';
-    render();
-    stage.setImage(loaded.bitmap, state.crop);
-    stage.resize();
+    state.choices = [];
+    if (state.phase === 'empty') pushStep('cropping');
+    else replaceStep('cropping');
+    showCropping();
+    saveSession();
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
+    state.choices = [];
     render();
   }
 }
+
+/** A crop restored from a previous run has to still fit the image it is applied to. */
+function clampCrop(crop: Rect | undefined, image: ImageBuffer): Rect {
+  const whole = { x0: 0, y0: 0, x1: image.width - 1, y1: image.height - 1 };
+  if (!crop) return whole;
+  const x0 = Math.max(0, Math.min(image.width - 2, crop.x0));
+  const y0 = Math.max(0, Math.min(image.height - 2, crop.y0));
+  const x1 = Math.max(x0 + 1, Math.min(image.width - 1, crop.x1));
+  const y1 = Math.max(y0 + 1, Math.min(image.height - 1, crop.y1));
+  return Number.isFinite(x0 + y0 + x1 + y1) ? { x0, y0, x1, y1 } : whole;
+}
+
+async function takeIncoming(image: IncomingImage): Promise<void> {
+  try {
+    await accept(await fetchIncoming(image), image);
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    state.choices = [];
+    render();
+  }
+}
+
+installHost({
+  onImages(images) {
+    if (images.length === 1) {
+      void takeIncoming(images[0]);
+      return;
+    }
+    state.choices = images;
+    // A new share always starts over, whatever the user was in the middle of.
+    if (state.phase !== 'empty') clearImage();
+    render();
+  },
+});
 
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
@@ -180,28 +421,26 @@ window.addEventListener('paste', (e) => {
   if (file) void accept(file);
 });
 window.addEventListener('resize', () => stage.resize());
+window.addEventListener('orientationchange', () => setTimeout(() => stage.resize(), 120));
 
 /* ------------------------------------------------------------- extraction */
 
 extractBtn.addEventListener('click', () => void runExtraction());
 recropBtn.addEventListener('click', () => {
-  state.phase = 'cropping';
-  state.analysis = null;
-  state.calibration = null;
-  stage.setImage(state.fullBitmap, state.crop);
-  render();
-  stage.resize();
+  // The same move the back button makes, so the two never disagree.
+  if (depth > 1) history.back();
+  else showCropping();
 });
 resetBtn.addEventListener('click', () => {
-  state.phase = 'empty';
-  state.full = null;
-  state.fullBitmap = null;
-  state.cropped = null;
-  state.analysis = null;
-  state.calibration = null;
-  stage.setImage(null, null);
-  render();
+  if (depth > 0) {
+    const back = depth;
+    depth = 0;
+    history.go(-back);
+  } else {
+    clearImage();
+  }
 });
+fitBtn.addEventListener('click', () => stage.resetView());
 
 async function runExtraction(): Promise<void> {
   if (!state.full || !state.crop) return;
@@ -232,6 +471,7 @@ async function runExtraction(): Promise<void> {
     state.visible = new Set(analysis.series.map((_, i) => i));
     state.names = analysis.series.map((_, i) => `series_${i + 1}`);
     state.phase = 'ready';
+    pushStep('ready');
     render();
     stage.setImage(state.croppedBitmap, null);
     stage.setAnalysis(analysis, state.calibration, state.visible);
@@ -310,6 +550,10 @@ function currentSeries(): DataSeries[] {
   return all.filter((_, i) => state.visible.has(i));
 }
 
+function csvFileName(): string {
+  return `${state.fileName.replace(/\.[^.]+$/, '') || 'plot'}-data.csv`;
+}
+
 /* ----------------------------------------------------------------- render */
 
 function render(): void {
@@ -318,6 +562,7 @@ function render(): void {
   extractBtn.hidden = state.phase !== 'cropping';
   extractBtn.disabled = state.phase === 'working';
   recropBtn.hidden = state.phase !== 'ready';
+  fitBtn.hidden = !stage.zoomed;
   renderPanel();
 }
 
@@ -326,11 +571,11 @@ function renderPanel(): void {
     panel.innerHTML = `
       <div class="card">
         <h2>How it works</h2>
-        <ol style="margin:0;padding-left:20px;color:var(--text-dim);font-size:13.5px;line-height:1.7">
+        <ol class="steps">
           <li>Load a screenshot of a line or scatter plot.</li>
           <li>Crop to a single plot area.</li>
           <li>Check the four axis anchors. They are pre-filled from the tick labels but you decide what is right.</li>
-          <li>Download the CSV, uncertainty and all.</li>
+          <li>${onAndroid ? 'Save or share' : 'Download'} the CSV, uncertainty and all.</li>
         </ol>
       </div>`;
     return;
@@ -340,8 +585,9 @@ function renderPanel(): void {
     panel.innerHTML = `
       <div class="card">
         <h2>Crop</h2>
-        <p style="margin:0 0 10px;color:var(--text-dim);font-size:13.5px">
+        <p class="status" style="margin-top:0">
           Drag the rectangle so it holds one plot: the axes, the tick labels and the data, and as little else as possible.
+          Pinch to zoom in, double-tap to zoom back out.
         </p>
         <div class="row">
           <div>
@@ -359,6 +605,7 @@ function renderPanel(): void {
     sel.value = state.modeOverride;
     sel.addEventListener('change', () => {
       state.modeOverride = sel.value as State['modeOverride'];
+      scheduleSave();
     });
     return;
   }
@@ -374,6 +621,7 @@ function renderPanel(): void {
   const warnings = analysis.warnings
     .map((w) => `<div class="notice ${w.level === 'info' ? 'info' : ''}">${escapeHtml(w.message)}</div>`)
     .join('');
+  const shareable = canShareCsv();
 
   panel.innerHTML = `
     ${warnings}
@@ -421,8 +669,15 @@ function renderPanel(): void {
           <input type="number" id="count" min="2" max="20000" step="1" value="${state.count}" />
         </div>
       </div>
-      <div class="row" style="margin-top:10px">
-        <button class="primary wide" id="download" ${series.length === 0 ? 'disabled' : ''}>Download CSV</button>
+      <div class="row export-row">
+        <button class="primary" id="save" ${series.length === 0 ? 'disabled' : ''}>
+          ${onAndroid ? 'Save CSV' : 'Download CSV'}
+        </button>
+        ${
+          shareable
+            ? `<button id="share" ${series.length === 0 ? 'disabled' : ''}>Share CSV</button>`
+            : ''
+        }
       </div>
       <p class="status">${escapeHtml(outputSummary(series))}</p>
       <div class="preview" id="preview">${escapeHtml(previewText(series))}</div>
@@ -448,15 +703,15 @@ function renderPanel(): void {
         <div class="anchor-grid">
           <span class="tag">A</span>
           <div><label for="${axis}a-px">pixel</label><input type="number" id="${axis}a-px" step="0.1" value="${round(a.a.px)}" /></div>
-          <div><label for="${axis}a-val">value</label><input type="text" id="${axis}a-val" value="${formatValue(a.a.value)}" /></div>
+          <div><label for="${axis}a-val">value</label><input type="text" inputmode="decimal" id="${axis}a-val" value="${formatValue(a.a.value)}" /></div>
           <span class="tag">B</span>
           <div><label for="${axis}b-px">pixel</label><input type="number" id="${axis}b-px" step="0.1" value="${round(a.b.px)}" /></div>
-          <div><label for="${axis}b-val">value</label><input type="text" id="${axis}b-val" value="${formatValue(a.b.value)}" /></div>
+          <div><label for="${axis}b-val">value</label><input type="text" inputmode="decimal" id="${axis}b-val" value="${formatValue(a.b.value)}" /></div>
         </div>
         ${
           annotation
-            ? `<label style="display:flex;gap:8px;align-items:center;margin-top:10px;min-height:var(--tap);color:var(--text)">
-                 <input type="checkbox" data-annotation="${axis}" ${applied ? 'checked' : ''} style="width:22px;height:22px" />
+            ? `<label class="check-row">
+                 <input type="checkbox" data-annotation="${axis}" ${applied ? 'checked' : ''} />
                  Apply the "${escapeHtml(annotation.text)}" annotation found beside this axis
                </label>`
             : ''
@@ -523,6 +778,7 @@ function wirePanel(): void {
     resample.value = state.resample;
     resample.addEventListener('change', () => {
       state.resample = resample.value as State['resample'];
+      scheduleSave();
       renderPanel();
     });
   }
@@ -530,17 +786,21 @@ function wirePanel(): void {
   count?.addEventListener('change', () => {
     const v = Math.round(Number(count.value));
     if (Number.isFinite(v) && v >= 2) state.count = Math.min(20000, v);
+    scheduleSave();
     renderPanel();
   });
 
-  document.getElementById('download')?.addEventListener('click', () => {
-    if (!state.analysis || !state.calibration) return;
-    const csv = toCsv(state.analysis, currentSeries(), {
-      source: state.fileName,
-      calibration: state.calibration,
-    });
-    downloadText(`${state.fileName.replace(/\.[^.]+$/, '') || 'plot'}-data.csv`, csv);
+  document.getElementById('save')?.addEventListener('click', () => void send('save'));
+  document.getElementById('share')?.addEventListener('click', () => void send('share'));
+}
+
+async function send(destination: 'save' | 'share'): Promise<void> {
+  if (!state.analysis || !state.calibration) return;
+  const csv = toCsv(state.analysis, currentSeries(), {
+    source: state.fileName,
+    calibration: state.calibration,
   });
+  await exportCsv(destination, csvFileName(), csv);
 }
 
 function outputSummary(series: DataSeries[]): string {
@@ -576,6 +836,7 @@ function escapeHtml(text: string): string {
   );
 }
 
+replaceStep('empty');
 render();
 // Warm the OCR worker while the user is still cropping.
 void ocr.start();

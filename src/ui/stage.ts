@@ -2,29 +2,28 @@
  * The interactive canvas: the image, the crop rectangle, and after extraction
  * the detected frame, the traced series and the four draggable anchors.
  *
+ * It is driven by pointer events throughout, so a finger, a stylus and a mouse
+ * take exactly the same path through the code. Two things follow from being
+ * used on a phone: every grab target is at least `TOUCH_TARGET` across however
+ * small the thing it grabs is drawn, and the image can be pinched and panned,
+ * because the detail that decides whether a trace is right is a few pixels wide
+ * and a phone screen is held at arm's length.
+ *
  * Anchors are drawn as full-height (or full-width) guide lines with a chunky
- * grab handle, because on a phone a thin line is impossible to hit. The handle
- * is 44 px of touch target regardless of zoom.
+ * grab handle: on a phone a thin line is impossible to hit.
  */
 
 import type { Analysis } from '../engine/pipeline.ts';
 import type { Calibration, Rect, RGB } from '../engine/types.ts';
 
 export type AnchorId = 'xa' | 'xb' | 'ya' | 'yb';
-export type CropHandle =
-  | 'move'
-  | 'nw'
-  | 'n'
-  | 'ne'
-  | 'e'
-  | 'se'
-  | 's'
-  | 'sw'
-  | 'w';
+export type CropHandle = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 export interface StageCallbacks {
   onCropChange(rect: Rect): void;
   onAnchorChange(id: AnchorId, px: number): void;
+  /** Fires when the zoom or pan changes, so the UI can offer a way back to fit. */
+  onViewChange?(zoomed: boolean): void;
 }
 
 interface View {
@@ -33,22 +32,39 @@ interface View {
   dy: number;
 }
 
+/** Radius of the drawn handle. The target around it is TOUCH_TARGET wide. */
 const HANDLE = 22;
-const TOUCH_SLOP = 26;
+/** Apple and Google both land on 44px; a guide line is drawn 1.5px wide. */
+const TOUCH_TARGET = 44;
+const GRAB = TOUCH_TARGET / 2;
+const MAX_ZOOM = 12;
+const DOUBLE_TAP_MS = 320;
+const DOUBLE_TAP_SLOP = 28;
+const TAP_SLOP = 10;
+
+type Gesture =
+  | { kind: 'crop'; handle: CropHandle; start: Rect; ox: number; oy: number }
+  | { kind: 'anchor'; id: AnchorId }
+  | { kind: 'pan'; ox: number; oy: number; startDx: number; startDy: number }
+  | { kind: 'pinch'; distance: number; cx: number; cy: number; startScale: number; startDx: number; startDy: number };
 
 export class Stage {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private view: View = { scale: 1, dx: 0, dy: 0 };
+  private fitScale = 0;
   private bitmap: ImageBitmap | null = null;
   private cropRect: Rect | null = null;
   private analysis: Analysis | null = null;
   private calibration: Calibration | null = null;
   private visible = new Set<number>();
   private mode: 'crop' | 'anchors' = 'crop';
-  private drag: { kind: 'crop'; handle: CropHandle; start: Rect; ox: number; oy: number } | null = null;
-  private anchorDrag: AnchorId | null = null;
+  private gesture: Gesture | null = null;
   private hover: AnchorId | CropHandle | null = null;
+  private pointers = new Map<number, { x: number; y: number }>();
+  private downAt: { x: number; y: number; time: number } | null = null;
+  private lastTap: { x: number; y: number; time: number } | null = null;
+  private moved = false;
 
   constructor(canvas: HTMLCanvasElement, private callbacks: StageCallbacks) {
     this.canvas = canvas;
@@ -59,8 +75,10 @@ export class Stage {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerUp);
-    canvas.addEventListener('pointerleave', () => {
-      if (!this.drag && !this.anchorDrag) {
+    // Not passive: zooming the image must not scroll the page behind it.
+    canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    canvas.addEventListener('pointerleave', (event) => {
+      if (event.pointerType === 'mouse' && !this.gesture) {
         this.hover = null;
         this.render();
       }
@@ -72,6 +90,7 @@ export class Stage {
     this.cropRect = cropRect;
     this.mode = 'crop';
     this.analysis = null;
+    this.fitScale = 0;
     this.resize();
   }
 
@@ -93,30 +112,124 @@ export class Stage {
     return this.mode === 'crop';
   }
 
-  /** Fit the canvas to its container and recompute the image transform. */
+  get zoomed(): boolean {
+    return this.fitScale > 0 && this.view.scale > this.fitScale * 1.02;
+  }
+
+  /** Back to the whole image, centred. */
+  resetView(): void {
+    if (!this.bitmap) return;
+    this.view = this.fittedView();
+    this.render();
+    this.callbacks.onViewChange?.(false);
+  }
+
+  /**
+   * Fit the canvas to its container and recompute the image transform.
+   *
+   * A rotation is a resize, and losing the zoom on rotate is exactly the sort of
+   * thing that makes a phone app annoying, so the zoom factor and the point in
+   * the middle of the view are both carried across.
+   */
   resize(): void {
     const parent = this.canvas.parentElement;
     if (!parent || !this.bitmap) {
       this.render();
       return;
     }
+    const previousFit = this.fitScale;
+    const before = this.centreImagePoint();
+
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     const cssWidth = parent.clientWidth;
-    const aspect = this.bitmap.height / this.bitmap.width;
-    const cssHeight = Math.max(150, Math.min(cssWidth * aspect, window.innerHeight * 0.6));
+    const cssHeight = this.preferredHeight(cssWidth);
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
     this.canvas.width = Math.round(cssWidth * dpr);
     this.canvas.height = Math.round(cssHeight * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const scale = Math.min(cssWidth / this.bitmap.width, cssHeight / this.bitmap.height);
-    this.view = {
-      scale,
-      dx: (cssWidth - this.bitmap.width * scale) / 2,
-      dy: (cssHeight - this.bitmap.height * scale) / 2,
-    };
+    this.fitScale = Math.min(cssWidth / this.bitmap.width, cssHeight / this.bitmap.height);
+    const zoom = previousFit > 0 ? this.view.scale / previousFit : 1;
+    this.view = this.fittedView();
+    if (zoom > 1.02 && before) {
+      this.view.scale = this.fitScale * zoom;
+      this.centreOn(before.x, before.y);
+    }
+    this.clampView();
     this.render();
+  }
+
+  /**
+   * How tall the stage should be.
+   *
+   * The image's own aspect ratio decides, but within bounds: never so short that
+   * there is nowhere to zoom into, and never so tall that the controls below it
+   * are pushed off a phone screen.
+   */
+  private preferredHeight(cssWidth: number): number {
+    const bitmap = this.bitmap!;
+    const viewport = window.innerHeight || 800;
+    const natural = cssWidth * (bitmap.height / bitmap.width);
+    const min = Math.min(280, Math.round(viewport * 0.36));
+    const max = Math.round(viewport * 0.66);
+    return Math.round(Math.max(min, Math.min(natural, max)));
+  }
+
+  private fittedView(): View {
+    const bitmap = this.bitmap!;
+    const cssWidth = this.cssWidth();
+    const cssHeight = this.cssHeight();
+    return {
+      scale: this.fitScale,
+      dx: (cssWidth - bitmap.width * this.fitScale) / 2,
+      dy: (cssHeight - bitmap.height * this.fitScale) / 2,
+    };
+  }
+
+  private cssWidth(): number {
+    return this.canvas.clientWidth || parseFloat(this.canvas.style.width) || 0;
+  }
+
+  private cssHeight(): number {
+    return this.canvas.clientHeight || parseFloat(this.canvas.style.height) || 0;
+  }
+
+  private centreImagePoint(): { x: number; y: number } | null {
+    if (!this.bitmap || this.view.scale <= 0) return null;
+    return this.toImage(this.cssWidth() / 2, this.cssHeight() / 2);
+  }
+
+  private centreOn(imageX: number, imageY: number): void {
+    this.view.dx = this.cssWidth() / 2 - imageX * this.view.scale;
+    this.view.dy = this.cssHeight() / 2 - imageY * this.view.scale;
+  }
+
+  /**
+   * Keep the image from being flung out of the frame: if it is bigger than the
+   * canvas it may not be dragged past its own edge, and if it is smaller it
+   * stays centred on that axis.
+   */
+  private clampView(): void {
+    if (!this.bitmap) return;
+    const cssWidth = this.cssWidth();
+    const cssHeight = this.cssHeight();
+    const w = this.bitmap.width * this.view.scale;
+    const h = this.bitmap.height * this.view.scale;
+    this.view.dx = w <= cssWidth ? (cssWidth - w) / 2 : Math.min(0, Math.max(cssWidth - w, this.view.dx));
+    this.view.dy = h <= cssHeight ? (cssHeight - h) / 2 : Math.min(0, Math.max(cssHeight - h, this.view.dy));
+  }
+
+  private zoomAbout(screenX: number, screenY: number, factor: number): void {
+    if (!this.bitmap || this.fitScale <= 0) return;
+    const next = Math.max(this.fitScale, Math.min(this.fitScale * MAX_ZOOM, this.view.scale * factor));
+    if (next === this.view.scale) return;
+    const anchor = this.toImage(screenX, screenY);
+    this.view.scale = next;
+    this.view.dx = screenX - anchor.x * next;
+    this.view.dy = screenY - anchor.y * next;
+    this.clampView();
+    this.callbacks.onViewChange?.(this.zoomed);
   }
 
   private toScreen(x: number, y: number): { x: number; y: number } {
@@ -127,61 +240,186 @@ export class Stage {
     return { x: (x - this.view.dx) / this.view.scale, y: (y - this.view.dy) / this.view.scale };
   }
 
-  private pointerPos(event: PointerEvent): { x: number; y: number } {
+  private pointerPos(event: { clientX: number; clientY: number }): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
 
+  /* --------------------------------------------------------------- input */
+
   private onPointerDown = (event: PointerEvent) => {
     if (!this.bitmap) return;
     const p = this.pointerPos(event);
-    if (this.mode === 'anchors') {
-      const id = this.anchorAt(p);
-      if (!id) return;
-      this.anchorDrag = id;
+    this.pointers.set(event.pointerId, p);
+    try {
       this.canvas.setPointerCapture(event.pointerId);
-      event.preventDefault();
+    } catch {
+      // The pointer can already be gone by the time this runs - a very fast tap,
+      // or a touch the system took over. Losing capture is survivable; throwing
+      // out of the handler and leaving the gesture half-started is not.
+    }
+    event.preventDefault();
+
+    if (this.pointers.size === 2) {
+      this.beginPinch();
       return;
     }
-    if (!this.cropRect) return;
-    const handle = this.cropHandleAt(p);
-    if (!handle) return;
-    const img = this.toImage(p.x, p.y);
-    this.drag = { kind: 'crop', handle, start: { ...this.cropRect }, ox: img.x, oy: img.y };
-    this.canvas.setPointerCapture(event.pointerId);
-    event.preventDefault();
+    if (this.pointers.size > 2) return;
+
+    this.downAt = { x: p.x, y: p.y, time: event.timeStamp };
+    this.moved = false;
+
+    if (this.mode === 'anchors') {
+      const id = this.anchorAt(p);
+      this.gesture = id ? { kind: 'anchor', id } : this.beginPan(p);
+      if (id) this.render();
+      return;
+    }
+
+    const handle = this.cropRect ? this.cropHandleAt(p) : null;
+    if (handle && this.cropRect) {
+      const img = this.toImage(p.x, p.y);
+      this.gesture = { kind: 'crop', handle, start: { ...this.cropRect }, ox: img.x, oy: img.y };
+    } else {
+      this.gesture = this.beginPan(p);
+    }
   };
+
+  private beginPan(p: { x: number; y: number }): Gesture {
+    return { kind: 'pan', ox: p.x, oy: p.y, startDx: this.view.dx, startDy: this.view.dy };
+  }
+
+  private beginPinch(): void {
+    const [a, b] = Array.from(this.pointers.values());
+    this.gesture = {
+      kind: 'pinch',
+      distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      startScale: this.view.scale,
+      startDx: this.view.dx,
+      startDy: this.view.dy,
+    };
+    this.downAt = null;
+  }
 
   private onPointerMove = (event: PointerEvent) => {
     if (!this.bitmap) return;
     const p = this.pointerPos(event);
+    if (this.pointers.has(event.pointerId)) this.pointers.set(event.pointerId, p);
 
-    if (this.anchorDrag) {
-      const img = this.toImage(p.x, p.y);
-      const value = this.anchorDrag.startsWith('x') ? img.x : img.y;
-      this.callbacks.onAnchorChange(this.anchorDrag, value);
-      return;
-    }
-    if (this.drag && this.cropRect) {
-      const img = this.toImage(p.x, p.y);
-      this.callbacks.onCropChange(this.applyHandle(this.drag, img.x, img.y));
-      return;
+    if (this.downAt && Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) > TAP_SLOP) {
+      this.moved = true;
     }
 
+    const gesture = this.gesture;
+    if (gesture?.kind === 'pinch') {
+      if (this.pointers.size < 2) return;
+      const [a, b] = Array.from(this.pointers.values());
+      const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const scale = Math.max(
+        this.fitScale,
+        Math.min(this.fitScale * MAX_ZOOM, (gesture.startScale * distance) / gesture.distance),
+      );
+      // Zoom about the point the fingers started around, and let the midpoint
+      // moving pan at the same time - that is what a two-finger drag feels like.
+      const factor = scale / gesture.startScale;
+      this.view.scale = scale;
+      this.view.dx = cx - (gesture.cx - gesture.startDx) * factor;
+      this.view.dy = cy - (gesture.cy - gesture.startDy) * factor;
+      this.clampView();
+      this.render();
+      this.callbacks.onViewChange?.(this.zoomed);
+      return;
+    }
+
+    if (gesture?.kind === 'anchor') {
+      const img = this.toImage(p.x, p.y);
+      this.callbacks.onAnchorChange(gesture.id, gesture.id.startsWith('x') ? img.x : img.y);
+      return;
+    }
+
+    if (gesture?.kind === 'crop' && this.cropRect) {
+      const img = this.toImage(p.x, p.y);
+      this.callbacks.onCropChange(this.applyHandle(gesture, img.x, img.y));
+      return;
+    }
+
+    if (gesture?.kind === 'pan') {
+      this.view.dx = gesture.startDx + (p.x - gesture.ox);
+      this.view.dy = gesture.startDy + (p.y - gesture.oy);
+      this.clampView();
+      this.render();
+      return;
+    }
+
+    if (event.pointerType !== 'mouse') return;
     const next = this.mode === 'anchors' ? this.anchorAt(p) : this.cropHandleAt(p);
     if (next !== this.hover) {
       this.hover = next;
-      this.canvas.style.cursor = cursorFor(next);
+      this.canvas.style.cursor = cursorFor(next, this.mode);
       this.render();
     }
   };
 
   private onPointerUp = (event: PointerEvent) => {
-    if (this.canvas.hasPointerCapture(event.pointerId)) {
-      this.canvas.releasePointerCapture(event.pointerId);
+    try {
+      if (this.canvas.hasPointerCapture(event.pointerId)) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Same again: capture may have been dropped for us already.
     }
-    this.drag = null;
-    this.anchorDrag = null;
+    this.pointers.delete(event.pointerId);
+
+    if (this.gesture?.kind === 'pinch') {
+      // Dropping to one finger continues as a pan rather than stopping dead.
+      const remaining = Array.from(this.pointers.values())[0];
+      this.gesture = remaining ? this.beginPan(remaining) : null;
+      if (!remaining) this.callbacks.onViewChange?.(this.zoomed);
+      return;
+    }
+
+    const wasAnchor = this.gesture?.kind === 'anchor';
+    this.gesture = null;
+    if (wasAnchor) this.render();
+
+    const down = this.downAt;
+    this.downAt = null;
+    if (!down || this.moved || this.pointers.size > 0) {
+      this.lastTap = null;
+      return;
+    }
+    this.handleTap(down, event.timeStamp);
+  };
+
+  /** Double-tap toggles between the whole image and a close look at that spot. */
+  private handleTap(down: { x: number; y: number }, time: number): void {
+    const previous = this.lastTap;
+    const isDouble =
+      previous !== null &&
+      time - previous.time < DOUBLE_TAP_MS &&
+      Math.hypot(down.x - previous.x, down.y - previous.y) < DOUBLE_TAP_SLOP;
+    if (!isDouble) {
+      this.lastTap = { x: down.x, y: down.y, time };
+      return;
+    }
+    this.lastTap = null;
+    if (this.zoomed) this.resetView();
+    else {
+      this.zoomAbout(down.x, down.y, 3);
+      this.render();
+    }
+  }
+
+  private onWheel = (event: WheelEvent) => {
+    if (!this.bitmap) return;
+    event.preventDefault();
+    const p = this.pointerPos(event);
+    this.zoomAbout(p.x, p.y, Math.exp(-event.deltaY * 0.0016));
+    this.render();
   };
 
   private applyHandle(
@@ -217,10 +455,11 @@ export class Stage {
     if (!this.cropRect) return null;
     const a = this.toScreen(this.cropRect.x0, this.cropRect.y0);
     const b = this.toScreen(this.cropRect.x1, this.cropRect.y1);
-    const near = (v: number, target: number) => Math.abs(v - target) <= TOUCH_SLOP;
-    const insideX = p.x >= a.x - TOUCH_SLOP && p.x <= b.x + TOUCH_SLOP;
-    const insideY = p.y >= a.y - TOUCH_SLOP && p.y <= b.y + TOUCH_SLOP;
-    if (!insideX || !insideY) return null;
+    // An edge target may not eat more than a third of the rectangle, or a small
+    // crop becomes impossible to move because every point is an edge.
+    const slop = Math.min(GRAB, Math.max(12, (b.x - a.x) / 3), Math.max(12, (b.y - a.y) / 3));
+    const near = (v: number, target: number) => Math.abs(v - target) <= slop;
+    if (p.x < a.x - slop || p.x > b.x + slop || p.y < a.y - slop || p.y > b.y + slop) return null;
     const w = near(p.x, a.x);
     const e = near(p.x, b.x);
     const n = near(p.y, a.y);
@@ -246,10 +485,34 @@ export class Stage {
     ];
   }
 
+  /**
+   * Which anchor a press grabs: the nearest knob, and only failing that the
+   * nearest guide line.
+   *
+   * The two passes are not interchangeable. Guide lines cross the whole canvas,
+   * so an x guide that happens to run past a y anchor's knob sits a pixel or two
+   * from every point of it - and a single nearest-thing-wins test would then
+   * make that knob unpickable, which is precisely the case a phone user hits.
+   * The knob is what looks grabbable, so the knob wins.
+   */
   private anchorAt(p: { x: number; y: number }): AnchorId | null {
+    const anchors = this.anchorPositions();
     let best: AnchorId | null = null;
-    let bestD = TOUCH_SLOP;
-    for (const a of this.anchorPositions()) {
+    // Inclusive, so the target really is TOUCH_TARGET across and not a pixel shy.
+    let bestD = GRAB + 0.001;
+
+    for (const a of anchors) {
+      const handle = this.handlePosition(a);
+      const d = Math.hypot(p.x - handle.x, p.y - handle.y);
+      if (d < bestD) {
+        bestD = d;
+        best = a.id;
+      }
+    }
+    if (best) return best;
+
+    bestD = GRAB + 0.001;
+    for (const a of anchors) {
       const s = this.toScreen(a.axis === 'x' ? a.px : 0, a.axis === 'y' ? a.px : 0);
       const d = a.axis === 'x' ? Math.abs(p.x - s.x) : Math.abs(p.y - s.y);
       if (d < bestD) {
@@ -260,9 +523,28 @@ export class Stage {
     return best;
   }
 
+  /**
+   * Where an anchor's grab handle sits.
+   *
+   * Both coordinates are held a full grab radius inside the canvas. An anchor
+   * parked against the edge of the image - which is exactly where the last tick
+   * on an axis tends to be - would otherwise have most of its target off the
+   * canvas and be nearly impossible to pick up. The two anchors on an axis keep
+   * their own row (or column) so a clamped handle is still unambiguous.
+   */
+  private handlePosition(a: { id: AnchorId; axis: 'x' | 'y'; px: number }): { x: number; y: number } {
+    const s = this.toScreen(a.axis === 'x' ? a.px : 0, a.axis === 'y' ? a.px : 0);
+    const lane = a.id === 'xa' || a.id === 'ya' ? GRAB - 4 : GRAB + 26;
+    const clamp = (v: number, extent: number) => Math.max(GRAB, Math.min(extent - GRAB, v));
+    return a.axis === 'x'
+      ? { x: clamp(s.x, this.cssWidth()), y: this.cssHeight() - lane }
+      : { x: lane, y: clamp(s.y, this.cssHeight()) };
+  }
+
+  /* -------------------------------------------------------------- drawing */
+
   render(): void {
     const ctx = this.ctx;
-    const cssWidth = this.canvas.width / (window.devicePixelRatio || 1);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -271,12 +553,14 @@ export class Stage {
 
     const w = this.bitmap.width * this.view.scale;
     const h = this.bitmap.height * this.view.scale;
+    // Smooth when shrinking, crisp when magnified: at 8x the user is looking at
+    // individual pixels of the trace and interpolation would hide what they came
+    // to check.
     ctx.imageSmoothingEnabled = this.view.scale < 1;
     ctx.drawImage(this.bitmap, this.view.dx, this.view.dy, w, h);
 
     if (this.mode === 'crop' && this.cropRect) this.drawCrop();
     if (this.mode === 'anchors' && this.analysis) this.drawAnalysis();
-    void cssWidth;
   }
 
   private drawCrop(): void {
@@ -284,12 +568,13 @@ export class Stage {
     const r = this.cropRect!;
     const a = this.toScreen(r.x0, r.y0);
     const b = this.toScreen(r.x1, r.y1);
-    const full = { x: this.view.dx, y: this.view.dy, w: this.bitmap!.width * this.view.scale, h: this.bitmap!.height * this.view.scale };
 
     ctx.save();
+    // Shade the whole canvas outside the crop, not just the image: when the
+    // image is zoomed past the edges the shading has to reach the frame.
     ctx.fillStyle = 'rgba(12,16,24,0.55)';
     ctx.beginPath();
-    ctx.rect(full.x, full.y, full.w, full.h);
+    ctx.rect(0, 0, this.cssWidth(), this.cssHeight());
     ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.fill('evenodd');
 
@@ -312,6 +597,8 @@ export class Stage {
     }
 
     ctx.fillStyle = '#4dabf7';
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 1.5;
     for (const [hx, hy] of [
       [a.x, a.y],
       [(a.x + b.x) / 2, a.y],
@@ -325,6 +612,7 @@ export class Stage {
       ctx.beginPath();
       ctx.arc(hx, hy, HANDLE / 2.6, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -409,13 +697,11 @@ export class Stage {
   private drawAnchors(): void {
     const ctx = this.ctx;
     if (!this.calibration || !this.bitmap) return;
-    const left = this.view.dx;
-    const top = this.view.dy;
-    const right = left + this.bitmap.width * this.view.scale;
-    const bottom = top + this.bitmap.height * this.view.scale;
+    const width = this.cssWidth();
+    const height = this.cssHeight();
 
     for (const a of this.anchorPositions()) {
-      const active = this.hover === a.id || this.anchorDrag === a.id;
+      const active = this.hover === a.id || (this.gesture?.kind === 'anchor' && this.gesture.id === a.id);
       const colour = a.axis === 'x' ? '#f76707' : '#12b886';
       const s = this.toScreen(a.axis === 'x' ? a.px : 0, a.axis === 'y' ? a.px : 0);
       ctx.save();
@@ -423,34 +709,38 @@ export class Stage {
       ctx.lineWidth = active ? 2.5 : 1.5;
       ctx.setLineDash([5, 3]);
       ctx.beginPath();
+      // Guides span the canvas, so they stay grabbable when the image is panned.
       if (a.axis === 'x') {
-        ctx.moveTo(s.x, top);
-        ctx.lineTo(s.x, bottom);
+        ctx.moveTo(s.x, 0);
+        ctx.lineTo(s.x, height);
       } else {
-        ctx.moveTo(left, s.y);
-        ctx.lineTo(right, s.y);
+        ctx.moveTo(0, s.y);
+        ctx.lineTo(width, s.y);
       }
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Grab handle, kept inside the canvas so it is always reachable.
-      const hx = a.axis === 'x' ? s.x : left + (a.id === 'ya' ? 16 : 40);
-      const hy = a.axis === 'x' ? bottom - (a.id === 'xa' ? 16 : 40) : s.y;
+      const handle = this.handlePosition(a);
+      // A halo makes the handle legible over dark plot ink as well as light.
+      ctx.beginPath();
+      ctx.arc(handle.x, handle.y, (active ? HANDLE / 2 : HANDLE / 2.4) + 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fill();
       ctx.fillStyle = colour;
       ctx.beginPath();
-      ctx.arc(hx, hy, active ? HANDLE / 2 : HANDLE / 2.4, 0, Math.PI * 2);
+      ctx.arc(handle.x, handle.y, active ? HANDLE / 2 : HANDLE / 2.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.font = '600 10px ui-sans-serif, system-ui, sans-serif';
+      ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(a.id === 'xa' || a.id === 'ya' ? 'A' : 'B', hx, hy + 0.5);
+      ctx.fillText(a.id === 'xa' || a.id === 'ya' ? 'A' : 'B', handle.x, handle.y + 0.5);
       ctx.restore();
     }
   }
 }
 
-function cursorFor(handle: AnchorId | CropHandle | null): string {
+function cursorFor(handle: AnchorId | CropHandle | null, mode: 'crop' | 'anchors'): string {
   switch (handle) {
     case 'xa':
     case 'xb':
@@ -473,7 +763,7 @@ function cursorFor(handle: AnchorId | CropHandle | null): string {
     case 'sw':
       return 'nesw-resize';
     default:
-      return 'default';
+      return mode === 'anchors' ? 'grab' : 'default';
   }
 }
 
