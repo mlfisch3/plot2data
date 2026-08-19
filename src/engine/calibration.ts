@@ -196,10 +196,36 @@ export function anchorsFromFit(
     const y = fit.slope * px + fit.intercept;
     return fit.scale === 'log' ? Math.pow(10, y) : y;
   };
+  // Quantise in the scale's own space, so a decade endpoint on a log axis lands
+  // exactly on the decade instead of being rounded into a different one.
+  const toSpace = (v: number) => (fit.scale === 'log' ? Math.log10(v) : v);
+  const fromSpace = (v: number) => (fit.scale === 'log' ? Math.pow(10, v) : v);
+  const lo = toSpace(at(pxLo));
+  const hi = toSpace(at(pxHi));
   return {
-    a: { px: pxLo, value: at(pxLo), source: 'ocr' },
-    b: { px: pxHi, value: at(pxHi), source: 'ocr' },
+    a: { px: pxLo, value: fromSpace(tidy(lo, lo, hi)), source: 'ocr' },
+    b: { px: pxHi, value: fromSpace(tidy(hi, lo, hi)), source: 'ocr' },
   };
+}
+
+/**
+ * Round an anchor to the precision the fit actually supports.
+ *
+ * The fit puts the left edge of a 0-12 axis at 0.00054, which is true and
+ * useless: it is 0.005% of the range, an order of magnitude below the
+ * uncertainty this tool reports for the same axis. Showing it makes a correct
+ * calibration look broken, and every downstream number inherits the noise. So
+ * quantise to about 0.01% of the range, which is finer than anything measurable
+ * and reads as the number the axis is actually labelled with.
+ */
+function tidy(value: number, lo: number, hi: number): number {
+  if (!Number.isFinite(value)) return value;
+  const range = Math.abs(hi - lo);
+  if (!(range > 0)) return value;
+  const quantum = Math.pow(10, Math.floor(Math.log10(range)) - 4);
+  const rounded = Math.round(value / quantum) * quantum;
+  // Kill the binary-float dust the multiply leaves behind.
+  return Number(rounded.toPrecision(12));
 }
 
 /**

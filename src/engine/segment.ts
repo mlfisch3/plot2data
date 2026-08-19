@@ -587,8 +587,10 @@ export function selectDataComponents(
 
   const trunk = metrics.reduce((a, b) => (b.span > a.span ? b : a)).c;
   const path = new Float64Array(mask.width).fill(Number.NaN);
+  const distance = new Int32Array(mask.width);
   const fill = (c: Component) => {
     for (const [x, y] of columnsOf.get(c)!) path[x] = y;
+    refreshDistance(path, distance);
   };
   fill(trunk);
 
@@ -602,28 +604,49 @@ export function selectDataComponents(
   );
   const tol = Math.min(Math.max(3, stroke * 2.5), mask.height * 0.08);
   const maxRef = Math.max(12, Math.round(mask.width * 0.05));
+  const maxJoin = Math.max(8, Math.round(mask.width * 0.03));
 
+  // Grow nearest-first, not largest-first: a dashed line is a chain, and each
+  // link can only be judged once its neighbour is part of the path. Taking the
+  // biggest remaining piece instead leaves gaps the chain never crosses.
   const accepted = new Set<Component>([trunk]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const m of metrics) {
-      if (accepted.has(m.c)) continue;
-      const cols = columnsOf.get(m.c)!;
-      const deviations: number[] = [];
-      let extrapolated = false;
-      for (const [x, y] of cols) {
-        const ref = referenceAt(path, x, maxRef);
-        if (ref === null) continue;
-        if (ref.extrapolated) extrapolated = true;
-        deviations.push(Math.abs(y - ref.value));
+  const refused = new Set<Component>();
+  for (;;) {
+    let next: Component | null = null;
+    let nextGap = Infinity;
+    for (const c of components) {
+      if (accepted.has(c) || refused.has(c)) continue;
+      let gap = Infinity;
+      for (const x of columnsOf.get(c)!.keys()) gap = Math.min(gap, distance[x]);
+      if (gap < nextGap) {
+        nextGap = gap;
+        next = c;
       }
-      if (deviations.length === 0) continue;
-      if (medianNum(deviations) <= tol * (extrapolated ? 2 : 1)) {
-        accepted.add(m.c);
-        fill(m.c);
-        changed = true;
-      }
+    }
+    if (!next || nextGap > maxJoin) break;
+
+    const deviations: number[] = [];
+    let allowance = tol;
+    for (const [x, y] of columnsOf.get(next)!) {
+      // Only judge where the path is genuinely nearby. Extrapolating a slope
+      // across a long component's far end says nothing about whether its near
+      // end continues the line, and would reject the continuation.
+      if (distance[x] > maxJoin) continue;
+      const ref = referenceAt(path, x, maxRef);
+      if (ref === null) continue;
+      // Across a gap on a steep segment, a small slope error becomes a large
+      // position error, so the allowance grows with slope and gap.
+      const local = ref.extrapolated
+        ? tol * 2 + Math.abs(ref.slope) * ref.distance
+        : tol;
+      allowance = Math.max(allowance, local);
+      deviations.push(Math.abs(y - ref.value));
+    }
+    if (deviations.length > 0 && medianNum(deviations) <= allowance) {
+      accepted.add(next);
+      fill(next);
+    } else {
+      refused.add(next);
     }
   }
 
@@ -631,15 +654,35 @@ export function selectDataComponents(
   return { kept, rejected: components.filter((c) => !accepted.has(c)), markerLike: false };
 }
 
+/** Distance from each column to the nearest column where the path is known. */
+function refreshDistance(path: Float64Array, out: Int32Array): void {
+  const big = path.length + 1;
+  let run = big;
+  for (let i = 0; i < path.length; i++) {
+    run = Number.isNaN(path[i]) ? Math.min(big, run + 1) : 0;
+    out[i] = run;
+  }
+  run = big;
+  for (let i = path.length - 1; i >= 0; i--) {
+    run = Number.isNaN(path[i]) ? Math.min(big, run + 1) : 0;
+    if (run < out[i]) out[i] = run;
+  }
+}
+
 /**
  * The path's value at column `x`: interpolated when the path is known on both
  * sides, otherwise extrapolated along the local slope from the nearer side.
+ *
+ * The slope comes from a least-squares fit over the nearest known columns, not
+ * from the last two. The final column of a dash is half-covered ink, so its
+ * centroid is biased, and a two-point slope built on it swings wildly - enough
+ * to break the chain in the middle of a steep dashed segment.
  */
 function referenceAt(
   path: Float64Array,
   x: number,
   maxRef: number,
-): { value: number; extrapolated: boolean } | null {
+): { value: number; extrapolated: boolean; distance: number; slope: number } | null {
   let left = -1;
   for (let i = x - 1; i >= Math.max(0, x - maxRef); i--) {
     if (!Number.isNaN(path[i])) {
@@ -656,22 +699,39 @@ function referenceAt(
   }
   if (left >= 0 && right >= 0) {
     const t = (x - left) / (right - left);
-    return { value: path[left] + t * (path[right] - path[left]), extrapolated: false };
+    return {
+      value: path[left] + t * (path[right] - path[left]),
+      extrapolated: false,
+      distance: Math.min(x - left, right - x),
+      slope: (path[right] - path[left]) / (right - left),
+    };
   }
   const anchor = left >= 0 ? left : right;
   if (anchor < 0) return null;
-  // Slope from a second known column on the same side.
-  const step = left >= 0 ? -1 : 1;
-  let second = -1;
-  for (let i = anchor + step; i >= 0 && i < path.length && Math.abs(i - anchor) <= maxRef; i += step) {
-    if (!Number.isNaN(path[i])) {
-      second = i;
-      break;
-    }
+  const distance = Math.abs(x - anchor);
+  const slope = slopeNear(path, anchor, left >= 0 ? -1 : 1, 10);
+  return { value: path[anchor] + slope * (x - anchor), extrapolated: true, distance, slope };
+}
+
+/** Least-squares slope over up to `count` known columns from `anchor`. */
+function slopeNear(path: Float64Array, anchor: number, step: number, count: number): number {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = anchor; i >= 0 && i < path.length && xs.length < count; i += step) {
+    if (Number.isNaN(path[i])) continue;
+    xs.push(i);
+    ys.push(path[i]);
   }
-  if (second < 0) return { value: path[anchor], extrapolated: true };
-  const slope = (path[anchor] - path[second]) / (anchor - second);
-  return { value: path[anchor] + slope * (x - anchor), extrapolated: true };
+  if (xs.length < 2) return 0;
+  const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < xs.length; i++) {
+    sxy += (xs[i] - mx) * (ys[i] - my);
+    sxx += (xs[i] - mx) * (xs[i] - mx);
+  }
+  return sxx > 1e-9 ? sxy / sxx : 0;
 }
 
 /** Mask covering only the selected components. */

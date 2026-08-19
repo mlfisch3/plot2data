@@ -25,6 +25,7 @@ afterAll(async () => {
       (r) =>
         `  ${r.id.padEnd(22)} series ${r.detectedSeries}/${r.expectedSeries}  ${r.mode.padEnd(6)} ` +
         `${r.xScale}/${r.yScale}  rms ${r.errors.map((e) => `${e.rmsPercent.toFixed(3)}%`).join(' ')}` +
+        `  cover ${r.errors.map((e) => `${(e.coverage * 100).toFixed(0)}%`).join(' ')}` +
         `  axis err x ${r.xRangeError.toFixed(3)}% y ${r.yRangeError.toFixed(3)}%`,
     )
     .join('\n');
@@ -54,6 +55,9 @@ describe('accuracy over the synthetic corpus', () => {
       for (const e of r.errors) {
         expect(e.points).toBeGreaterThanOrEqual(minPoints);
         expect(e.rmsPercent).toBeLessThan(BUDGET_PERCENT);
+        // A truncated trace can still score a low RMS over the part it covers,
+        // so coverage is asserted separately.
+        expect(e.coverage).toBeGreaterThan(0.9);
       }
     });
   }

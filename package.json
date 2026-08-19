@@ -5,13 +5,15 @@
   "type": "module",
   "description": "Client-side extraction of numerical data from images of plots",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run assets && vite",
+    "build": "npm run assets && tsc --noEmit && vite build",
     "preview": "vite preview",
+    "assets": "node --experimental-strip-types tools/copy-tesseract.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "corpus": "node --experimental-strip-types tools/generate-corpus.ts",
-    "accuracy": "vitest run test/accuracy.test.ts --reporter=verbose"
+    "accuracy": "vitest run test/accuracy.test.ts --reporter=verbose",
+    "report": "node --experimental-strip-types tools/accuracy-report.ts"
   },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",

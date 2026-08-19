@@ -22,6 +22,8 @@ export interface SeriesError {
   /** RMS x error as a percentage of the x range. */
   rmsXPercent: number;
   points: number;
+  /** Fraction of the true x range the extracted series actually spans. */
+  coverage: number;
 }
 
 export interface CaseResult {
@@ -101,10 +103,23 @@ export async function runCase(spec: CaseSpec, options: AnalyseOptions = {}): Pro
   for (let s = 0; s < spec.series.length; s++) {
     const idx = match[s];
     if (idx === null) {
-      errors.push({ label: spec.series[s].label, rmsPercent: NaN, maxPercent: NaN, rmsXPercent: NaN, points: 0 });
+      errors.push({
+        label: spec.series[s].label,
+        rmsPercent: NaN,
+        maxPercent: NaN,
+        rmsXPercent: NaN,
+        points: 0,
+        coverage: 0,
+      });
       continue;
     }
-    const pts = series[idx].points;
+    const pts = series[idx].points.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    const spanLo = pts.length ? Math.min(...pts.map((p) => p.x)) : 0;
+    const spanHi = pts.length ? Math.max(...pts.map((p) => p.x)) : 0;
+    const coverage = spec.xScale === 'logarithmic'
+      ? (Math.log10(Math.max(spanHi, 1e-12)) - Math.log10(Math.max(spanLo, 1e-12))) /
+        (Math.log10(spec.xMax) - Math.log10(spec.xMin))
+      : (spanHi - spanLo) / (spec.xMax - spec.xMin);
     let sse = 0;
     let sseX = 0;
     let worst = 0;
@@ -131,6 +146,7 @@ export async function runCase(spec: CaseSpec, options: AnalyseOptions = {}): Pro
       maxPercent: n ? (worst / yRange) * 100 : NaN,
       rmsXPercent: n ? (Math.sqrt(sseX / n) / xRange) * 100 : 0,
       points: n,
+      coverage,
     });
   }
 
