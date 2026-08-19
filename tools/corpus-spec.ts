@@ -15,6 +15,16 @@ export interface SeriesSpec {
   fn: string;
   dashed?: boolean;
   width?: number;
+  /**
+   * Draw corners round rather than mitred.
+   *
+   * It matters at a sharp vertex, and only there. A mitred corner runs on past
+   * the vertex - several pixels past it, for a 2 px line meeting itself at an
+   * acute angle - so the ink at the tip of a spike is not where the data point
+   * is. Matplotlib rounds by default and Chart.js mitres, so a corpus that
+   * tests peak recovery has to carry one of each.
+   */
+  roundJoin?: boolean;
 }
 
 export interface CaseSpec {
@@ -46,7 +56,18 @@ export interface CaseSpec {
   yDisplayDivisor?: number;
   /** Known-hard case: excluded from the pass/fail budget but still measured. */
   stretch?: boolean;
+  /**
+   * RMS budget for this case, as a percentage of full scale. Defaults to
+   * `DEFAULT_RMS_BUDGET`. A series whose value moves a fifth of full scale
+   * inside one pixel column cannot be read to a fifth of a percent at every x -
+   * what matters there is whether the peaks come back at the right height, and
+   * that is asserted separately and tightly.
+   */
+  rmsBudgetPercent?: number;
 }
+
+/** Default hard budget for the RMS error, as a percentage of full scale. */
+export const DEFAULT_RMS_BUDGET = 0.5;
 
 export const FUNCTIONS: Record<string, Fn> = {
   // Smooth, bounded, non-monotonic: the general case for curve tracing.
@@ -68,7 +89,31 @@ export const FUNCTIONS: Record<string, Fn> = {
   // Same shape as `sigmoid` but in the millions, to exercise a `1e6` axis
   // multiplier annotation: the axis is labelled 0..8 with `1e6` in the corner.
   megasigmoid: (x) => 1e6 * (0.4 + 7.2 / (1 + Math.exp(-(x - 6) / 1.2))),
+  // Triangle wave: every extremum is a sharp vertex, so the drawn polyline *is*
+  // the function and the apexes are exactly where a per-column centroid gets
+  // dragged down off the tip. Period and phase are chosen so the extrema land
+  // on sample points; see `TRIANGLE_PERIOD`.
+  triangle: (x) => 12 + 76 * (1 - Math.abs(2 * frac(x / TRIANGLE_PERIOD) - 1)),
+  // A slowly rising base with a narrow spike every two units - the shape of the
+  // captain's monthly retail-sales chart, where the defect was found.
+  narrowPeaks: (x) =>
+    18 + 2.6 * x + 34 * Math.max(0, 1 - distanceToOddInteger(x) / SPIKE_HALF_WIDTH),
 };
+
+/** Period of the `triangle` wave, in x units. */
+const TRIANGLE_PERIOD = 1.5;
+/** Half-width of a `narrowPeaks` spike, in x units. */
+const SPIKE_HALF_WIDTH = 0.15;
+
+function frac(v: number): number {
+  return v - Math.floor(v);
+}
+
+/** Spikes sit on the odd integers; this is how far x is from the nearest one. */
+function distanceToOddInteger(x: number): number {
+  const p = frac((x - 1) / 2);
+  return 2 * Math.min(p, 1 - p);
+}
 
 const OKABE = {
   blue: '#0072B2',
@@ -306,6 +351,40 @@ export const CASES: CaseSpec[] = [
     yMax: 1000,
     samples: 400,
     series: [{ label: 'power', colour: OKABE.purple, fn: 'power', width: 2 }],
+  },
+  {
+    id: 'sawtooth-sharp',
+    description: 'Triangle wave, sharp mitred apexes and troughs - tests peak recovery',
+    width: 900,
+    height: 560,
+    grid: true,
+    xScale: 'linear',
+    yScale: 'linear',
+    xMin: 0,
+    xMax: 12,
+    yMin: 0,
+    yMax: 100,
+    // 0.15 x units per vertex, so every extremum of the wave is a drawn vertex.
+    samples: 81,
+    rmsBudgetPercent: 0.6,
+    series: [{ label: 'triangle', colour: OKABE.vermillion, fn: 'triangle', width: 2 }],
+  },
+  {
+    id: 'narrow-peaks',
+    description: 'Rising base with narrow tall spikes, corners rounded - a monthly series',
+    width: 900,
+    height: 560,
+    grid: true,
+    xScale: 'linear',
+    yScale: 'linear',
+    xMin: 0,
+    xMax: 12,
+    yMin: 0,
+    yMax: 100,
+    // 0.05 x units per vertex, so each spike is drawn as a narrow triangle.
+    samples: 241,
+    rmsBudgetPercent: 0.6,
+    series: [{ label: 'narrowPeaks', colour: OKABE.blue, fn: 'narrowPeaks', width: 2, roundJoin: true }],
   },
   {
     id: 'narrow-small',

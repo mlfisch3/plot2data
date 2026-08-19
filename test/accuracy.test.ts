@@ -26,6 +26,9 @@ afterAll(async () => {
         `  ${r.id.padEnd(22)} series ${r.detectedSeries}/${r.expectedSeries}  ${r.mode.padEnd(6)} ` +
         `${r.xScale}/${r.yScale}  rms ${r.errors.map((e) => `${e.rmsPercent.toFixed(3)}%`).join(' ')}` +
         `  cover ${r.errors.map((e) => `${(e.coverage * 100).toFixed(0)}%`).join(' ')}` +
+        `  peak ${r.errors
+          .map((e) => (e.peak.count ? `${e.peak.shortfallPercent.toFixed(3)}%/${e.peak.count}` : '-'))
+          .join(' ')}` +
         `  axis err x ${r.xRangeError.toFixed(3)}% y ${r.yRangeError.toFixed(3)}%`,
     )
     .join('\n');
@@ -33,11 +36,15 @@ afterAll(async () => {
 });
 
 /**
- * Hard budget, as a percentage of full scale. The corpus currently measures
- * 0.04-0.20%, so this leaves headroom for OCR variation while still failing on
- * a real regression rather than letting one land quietly.
+ * Hard budget on the peak shortfall, as a percentage of full scale.
+ *
+ * Signed and measured inwards, so a tracer that shaves the tips off spikes
+ * fails here however good its headline RMS looks - which is the whole point of
+ * measuring peaks separately. Before the apex correction `narrow-peaks`
+ * measured 0.99% here and `sawtooth-sharp` 0.51%, on headline RMS figures of
+ * 0.26% and 0.24% that said nothing at all about it.
  */
-const BUDGET_PERCENT = 0.5;
+const PEAK_BUDGET_PERCENT = 0.4;
 
 describe('accuracy over the synthetic corpus', () => {
   for (const spec of CASES) {
@@ -54,10 +61,16 @@ describe('accuracy over the synthetic corpus', () => {
       const minPoints = r.mode === 'marker' ? Math.round(spec.samples * 0.7) : 50;
       for (const e of r.errors) {
         expect(e.points).toBeGreaterThanOrEqual(minPoints);
-        expect(e.rmsPercent).toBeLessThan(BUDGET_PERCENT);
+        expect(e.rmsPercent).toBeLessThan(r.rmsBudget);
         // A truncated trace can still score a low RMS over the part it covers,
         // so coverage is asserted separately.
         expect(e.coverage).toBeGreaterThan(0.9);
+        // So can a trace that clips every peak, which is why peaks are their own
+        // assertion rather than a line in the average.
+        if (e.peak.count > 0) {
+          expect(e.peak.shortfallPercent).toBeLessThan(PEAK_BUDGET_PERCENT);
+          expect(e.peak.shortfallPercent).toBeGreaterThan(-PEAK_BUDGET_PERCENT);
+        }
       }
     });
   }

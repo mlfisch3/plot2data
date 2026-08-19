@@ -70,6 +70,16 @@
     "description": "Log x and log y axes, power law"
   },
   {
+    "id": "sawtooth-sharp",
+    "image": "sawtooth-sharp.png",
+    "description": "Triangle wave, sharp mitred apexes and troughs - tests peak recovery"
+  },
+  {
+    "id": "narrow-peaks",
+    "image": "narrow-peaks.png",
+    "description": "Rising base with narrow tall spikes, corners rounded - a monthly series"
+  },
+  {
     "id": "narrow-small",
     "image": "narrow-small.png",
     "description": "Small 480x320 plot - tests behaviour at low pixel budget"

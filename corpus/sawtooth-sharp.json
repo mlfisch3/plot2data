@@ -1,0 +1,25 @@
+{
+  "id": "sawtooth-sharp",
+  "description": "Triangle wave with sharp apexes and troughs - tests peak recovery",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 81,
+  "rmsBudgetPercent": 1.2,
+  "series": [
+    {
+      "label": "triangle",
+      "colour": "#D55E00",
+      "fn": "triangle",
+      "width": 2
+    }
+  ],
+  "image": "sawtooth-sharp.png",
+  "truth": "sawtooth-sharp.csv"
+}

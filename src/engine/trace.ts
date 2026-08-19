@@ -160,7 +160,7 @@ export function traceCurve(
   }
 
   const thicknessPx = strokeThickness(raw);
-  const values = columnValues(raw, thicknessPx, opts);
+  const values = columnValues(mask, raw, thicknessPx, opts);
 
   const points: TracePoint[] = [];
   let lastIdx = -1;
@@ -245,6 +245,7 @@ function smoothstep(lo: number, hi: number, v: number): number {
  * continuous rather than merely smooth.
  */
 function columnValues(
+  mask: SeriesMask,
   runs: Array<Run | null>,
   thickness: number,
   opts: TraceOptions,
@@ -292,11 +293,68 @@ function columnValues(
     const turn = Math.max(-1, Math.min(1, peak - trough));
 
     const middle = (run.top + run.bottom) / 2;
-    const extreme = turn > 0 ? run.top + t / 2 : run.bottom - t / 2;
+    const extreme =
+      turn > 0
+        ? run.top + turnDepth(mask, x, run, t, opts.minAlpha, true)
+        : run.bottom - turnDepth(mask, x, run, t, opts.minAlpha, false);
     const steepValue = middle + Math.abs(turn) * (extreme - middle);
     values[x] = run.centroid + steep * (steepValue - run.centroid);
   }
   return values;
+}
+
+/**
+ * How far in from the outermost ink the plotted value sits, at a turning point.
+ *
+ * Half a stroke is the answer whenever the corner is drawn round, which is the
+ * common case and the one the rule is stated for. It is not the answer for a
+ * *mitred* corner: at a sharp vertex the miter runs on past the vertex - 5 px
+ * past it on the corpus's sawtooth, drawn with a line under 2 px wide - and
+ * stopping half a stroke in would read a peak the chart never plotted.
+ *
+ * What both joins have in common is the cross-section: the drawn line is one
+ * stroke wide everywhere except inside the join, so descending from the tip
+ * until the ink is a full stroke across lands on the vertex either way. The
+ * result is clamped between half a stroke - never less than the round-corner
+ * answer - and the column's own centroid, so the correction can only ever move
+ * the value between doing nothing and doing what the captain's rule says.
+ */
+function turnDepth(
+  mask: SeriesMask,
+  x: number,
+  run: Run,
+  t: number,
+  minAlpha: number,
+  downward: boolean,
+): number {
+  const from = downward ? run.top : run.bottom;
+  const limit = Math.max(t / 2, Math.abs(run.centroid - from));
+  const step = downward ? 1 : -1;
+  let prevY = from;
+  let prevWidth = 0;
+  for (let k = 0; k <= Math.ceil(limit) + 1; k++) {
+    const y = Math.round(from) + k * step;
+    if (y < 0 || y >= mask.height) break;
+    const width = rowWidth(mask, y, x, minAlpha);
+    if (width >= t) {
+      const share = width > prevWidth ? (t - prevWidth) / (width - prevWidth) : 1;
+      const at = prevY + (y - prevY) * Math.max(0, Math.min(1, share));
+      return Math.min(limit, Math.max(t / 2, Math.abs(at - from)));
+    }
+    prevY = y;
+    prevWidth = width;
+  }
+  return limit;
+}
+
+/** Ink across one row, within the contiguous run of ink containing column `x`. */
+function rowWidth(mask: SeriesMask, y: number, x: number, minAlpha: number): number {
+  const row = y * mask.width;
+  if (mask.alpha[row + x] < minAlpha) return 0;
+  let width = mask.alpha[row + x];
+  for (let i = x - 1; i >= 0 && mask.alpha[row + i] >= minAlpha; i--) width += mask.alpha[row + i];
+  for (let i = x + 1; i < mask.width && mask.alpha[row + i] >= minAlpha; i++) width += mask.alpha[row + i];
+  return width;
 }
 
 /** A missing neighbour is not evidence either way, so it does not veto a turn. */

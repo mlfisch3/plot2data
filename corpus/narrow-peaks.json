@@ -1,0 +1,26 @@
+{
+  "id": "narrow-peaks",
+  "description": "Rising base with narrow tall spikes, corners rounded - a monthly series",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 241,
+  "rmsBudgetPercent": 0.6,
+  "series": [
+    {
+      "label": "narrowPeaks",
+      "colour": "#0072B2",
+      "fn": "narrowPeaks",
+      "width": 2,
+      "roundJoin": true
+    }
+  ],
+  "image": "narrow-peaks.png",
+  "truth": "narrow-peaks.csv"
+}

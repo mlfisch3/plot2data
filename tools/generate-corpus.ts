@@ -59,6 +59,8 @@ function buildPageHtml(chartJs: string, c: CaseSpec, data: ReturnType<typeof gro
     backgroundColor: s.colour,
     borderWidth: c.scatter ? 0 : (s.width ?? 2),
     borderDash: s.dashed ? [10, 6] : [],
+    borderJoinStyle: s.roundJoin ? 'round' : 'miter',
+    borderCapStyle: s.roundJoin ? 'round' : 'butt',
     pointRadius: c.scatter ? (c.pointRadius ?? 4) : 0,
     pointBackgroundColor: s.colour,
     pointBorderWidth: 0,
@@ -136,8 +138,26 @@ function buildPageHtml(chartJs: string, c: CaseSpec, data: ReturnType<typeof gro
 </script>`;
 }
 
+/**
+ * Which cases to render.
+ *
+ * Regenerating the whole corpus moves every measured number with it, because a
+ * different Chrome renders text a hair differently. Naming cases on the command
+ * line keeps a new case from disturbing the fifteen already committed:
+ * `npm run corpus -- sawtooth-sharp narrow-peaks`.
+ */
+function selected(): CaseSpec[] {
+  const wanted = new Set(process.argv.slice(2));
+  if (wanted.size === 0) return CASES;
+  const cases = CASES.filter((c) => wanted.has(c.id));
+  const missing = [...wanted].filter((id) => !CASES.some((c) => c.id === id));
+  if (missing.length) throw new Error(`no such case: ${missing.join(', ')}`);
+  return cases;
+}
+
 async function main() {
   mkdirSync(OUT, { recursive: true });
+  const cases = selected();
   const chartJs = readFileSync(resolve(ROOT, 'node_modules/chart.js/dist/chart.umd.js'), 'utf8');
 
   const browser = await puppeteer.launch({
@@ -148,7 +168,7 @@ async function main() {
 
   const index: Array<Record<string, unknown>> = [];
   try {
-    for (const c of CASES) {
+    for (const c of cases) {
       const data = groundTruthPoints(c);
       const page = await browser.newPage();
       const dsf = c.deviceScaleFactor ?? 1;
@@ -183,8 +203,14 @@ async function main() {
   } finally {
     await browser.close();
   }
-  writeFileSync(resolve(OUT, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
-  console.log(`\n${index.length} cases written to corpus/`);
+  // The index always describes the whole corpus, whichever subset was rendered.
+  const all = CASES.map((c) => ({
+    id: c.id,
+    image: `${c.id}.${c.format === 'jpeg' ? 'jpg' : 'png'}`,
+    description: c.description,
+  }));
+  writeFileSync(resolve(OUT, 'index.json'), `${JSON.stringify(all, null, 2)}\n`);
+  console.log(`\n${index.length} of ${all.length} cases written to corpus/`);
 }
 
 function formatNum(v: number): string {
