@@ -29,28 +29,48 @@ asset-loader https origin, which is a normal secure context, so **OCR does run t
 
 ## Testing
 
-`npm test` runs unit tests *and* `test/accuracy.test.ts`, which extracts every corpus case and asserts a hard error budget,
-so an accuracy regression fails the build. `npm run accuracy` prints the per-case table; `npm run report` regenerates `ACCURACY.md`.
+`npm test` runs unit tests *and* `test/accuracy.test.ts`, which extracts every corpus case and asserts hard budgets on **two** metrics,
+so an accuracy regression fails the build. RMS over the whole trace is one; the signed shortfall at the turning points is the other, and
+it exists because RMS hid a defect that lost a third of every spike. Any change to `src/engine/trace.ts` must be judged on both.
+`npm run accuracy` prints the per-case table; `npm run report` regenerates `ACCURACY.md`.
 
 Corpus images are committed. Regenerate them with `npm run corpus` (headless Chrome via `puppeteer-core`, using the system Chrome)
-only when `tools/corpus-spec.ts` changes - the ground-truth CSVs and the accuracy numbers move with them.
+only when `tools/corpus-spec.ts` changes, and **name the cases you mean** (`npm run corpus -- narrow-peaks`): a bare `npm run corpus`
+re-renders all of them and moves every number in `ACCURACY.md` with them.
 
 `tools/diagnose.ts` and `tools/diagnose-series.ts` dump what each detection stage found for every corpus and example image;
 `tools/report-one.ts` prints the full analysis and CSV for one image. Reach for these before changing a threshold.
 
 ## Sharp edges learned the hard way
 
-- A low RMS error does not mean a good extraction: a trace truncated where another series crossed it still scored 0.04%.
-  The accuracy suite asserts x **coverage** separately for that reason.
+- A low RMS error does not mean a good extraction, twice over: a trace truncated where another series crossed it still scored 0.04%,
+  and a trace that shaved a third off every spike still scored 0.26%. A plot has few peaks and many columns, so an average over x hides
+  both. The accuracy suite asserts x **coverage** and **peak shortfall** separately for that reason.
+- **The synthetic corpus alone would not have caught the peak clipping.** Chart.js mitres its corners, and a miter overruns the vertex
+  by enough to mask a clipped centroid; matplotlib, which drew the captain's charts, rounds them. `narrow-peaks` carries round corners and
+  `sawtooth-sharp` mitred ones on purpose. Measure a real screenshot before believing a corpus result about peaks.
 - The overlay the UI draws over the traced path is deliberately unlike the ink beneath it. That is what makes a bad trace visible;
   drawing the trace in the series colour hides exactly the failures worth seeing.
 - **Android's asset merger gunzips any `.gz` in `assets/` and drops the extension.** That is why the language data is vendored gzipped
   under `vendor/` and shipped expanded. Anything added to the bundle should be checked for by name inside the APK
   (`unzip -l app-debug.apk | grep assets/`); a missing asset costs OCR silently, because the tool is designed to carry on without it.
-- Touch targets are worth measuring rather than assuming. Two anchor-handle bugs only showed up when the hit region was actually swept:
-  a handle at the canvas edge had half its target off screen, and a guide line crossing a handle out-competed it entirely.
+- Touch targets are worth measuring rather than assuming. Three marker-handle bugs only showed up when the hit region was actually swept:
+  a handle at the canvas edge had half its target off screen, a guide line crossing a handle out-competed it entirely, and zoomed in far
+  enough all four handles clamp to their edges and two of them land in the same corner.
 - Thresholds that are absolute in pixels or in colour distance break on the next image. Prefer limits relative to the plot size,
   to the strongest ink in the image, or to the label text's own measured size - most bugs here were a constant that did not scale.
+- **Stroke thickness is measured perpendicular to the path**, as ink area over path length, and the path it divides by is the *corrected*
+  trace. Both parts matter: the median vertical extent of a column reads 4x too high on a spiky series, and the raw centroid path cuts
+  every corner and comes out a third short, which inflates the width again. Anything derived from thickness - the apex correction, the
+  reported uncertainty - is wrong by the same factor if this is got wrong.
+- A rule that fires *sometimes* has to be gated on something with a wide margin, not on a fine comparison. The mitred-corner correction
+  compares the ink's cross-section against the stroke width; gated on a near-equality it fired everywhere and undid most of the peak fix,
+  and gated on "is this a sliver or most of a stroke" it fires only where it should.
+- The three result panels share one pan/zoom class (`src/ui/viewport.ts`) over **image pixel coordinates**, which is why the chart panel
+  is drawn in pixels and labelled in data units. A panel with an axis gutter passes an `inset`, or its content is fitted to the wrong box
+  and two linked panels disagree about what they are showing.
+- `hidden` loses to any explicit `display` in the stylesheet, and several controls here are laid out with flex and toggled with `hidden`.
+  `styles.css` forces `[hidden] { display: none !important }` for that reason.
 
 ## Maintaining this file
 
