@@ -412,8 +412,8 @@ function renderPanel(): void {
         <div>
           <label for="resample">Sampling</label>
           <select id="resample">
-            <option value="uniform">Uniform along the axis</option>
-            <option value="native">Native (one point per pixel column)</option>
+            <option value="uniform">Uniform</option>
+            <option value="native">Native (per pixel column)</option>
           </select>
         </div>
         <div>

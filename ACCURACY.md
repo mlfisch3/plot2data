@@ -26,7 +26,7 @@ compared against the same function the chart was drawn from. Log axes are compar
 | `jpeg-compressed` | 1/1 | curve | linear/linear | 0.037% | 100% | 0.021% / 0.061% |
 | `offset-annotation` | 1/1 | curve | linear/linear | 0.032% | 100% | 0.083% / 0.056% |
 | `retina-2x` | 1/1 | curve | linear/linear | 0.195% | 99% | 0.096% / 0.135% |
-| `log-log` | 1/1 | curve | log/log | 0.071% | 94% | 0.060% / 0.035% |
+| `log-log` | 1/1 | curve | log/log | 0.074% | 94% | 0.060% / 0.035% |
 | `narrow-small` | 1/1 | curve | linear/linear | 0.062% | 99% | 0.138% / 0.102% |
 
 Worst case across the whole synthetic corpus: **0.195% of full scale**, against a target of "well under 1%".
@@ -86,7 +86,7 @@ What it demands: 10^n superscript log axis, five marker-only series, dotted grid
 | axis scales | linear/log | linear/log |
 | series found | 5 | 5 |
 | mode | marker | marker |
-| reported uncertainty | - | +/-0.436 in x, x or / 1.273 in y (log axis) |
+| reported uncertainty | - | +/-0.511 in x, x or / 1.357 in y (log axis) |
 
 ### `03-women-men-percent.png` - Women and men, percent
 

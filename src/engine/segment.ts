@@ -63,6 +63,8 @@ export interface GridInfo {
   colour: RGB | null;
   /** Largest colour distance from the background found in the interior. */
   strongestInk: number;
+  /** Contrast below which ink on a gridline row is gridline, not data. */
+  faintLimit: number;
 }
 
 export function detectGridlines(img: ImageBuffer, frame: PlotFrame, interior: Rect): GridInfo {
@@ -78,10 +80,12 @@ export function detectGridlines(img: ImageBuffer, frame: PlotFrame, interior: Re
       if (d > strongestInk) strongestInk = d;
     }
   }
-  // A gridline is faint relative to the data ink as well as faint outright,
-  // which is what keeps a dark dotted grid on a chart of dark markers from
-  // being mistaken for a series - and a grey data line from being erased.
-  const faintLimit = Math.max(40, strongestInk * 0.55);
+  // A gridline is fainter than the data ink it sits behind. The test is
+  // relative, which is what protects a chart whose only series *is* grey: there
+  // the strongest ink is that series, so nothing is faint enough to be erased.
+  const faintLimit = Math.max(40, strongestInk * 0.85);
+  // How far to step perpendicular when asking "is this line thin?".
+  const probe = Math.max(3, Math.round(Math.min(img.width, img.height) / 300));
 
   const scan = (isColumn: boolean, out: Set<number>) => {
     const outerLo = isColumn ? interior.x0 : interior.y0;
@@ -94,12 +98,14 @@ export function detectGridlines(img: ImageBuffer, frame: PlotFrame, interior: Re
       const rs: number[] = [];
       const gs: number[] = [];
       const bs: number[] = [];
-      for (let i = innerLo; i <= innerHi; i++) {
+      const positions: number[] = [];
+      for (let i = innerLo + probe; i <= innerHi - probe; i++) {
         const c = isColumn ? getPixel(img, o, i) : getPixel(img, i, o);
         if (colourDistance(c, bg) < 12) continue;
         rs.push(c.r);
         gs.push(c.g);
         bs.push(c.b);
+        positions.push(i);
       }
       const inked = rs.length;
       // 0.3 rather than "almost every pixel": dotted grids are the norm on the
@@ -120,12 +126,12 @@ export function detectGridlines(img: ImageBuffer, frame: PlotFrame, interior: Re
   scan(true, columns);
   scan(false, rows);
 
-  if (samples.length === 0) return { columns, rows, colour: null, strongestInk };
+  if (samples.length === 0) return { columns, rows, colour: null, strongestInk, faintLimit };
   const mean = samples.reduce(
     (acc, c) => ({ r: acc.r + c.r / samples.length, g: acc.g + c.g / samples.length, b: acc.b + c.b / samples.length }),
     { r: 0, g: 0, b: 0 },
   );
-  return { columns, rows, colour: mean, strongestInk };
+  return { columns, rows, colour: mean, strongestInk, faintLimit };
 }
 
 function medianOf(values: number[]): number {
@@ -409,9 +415,17 @@ export function buildMask(
   const rivals = others.filter((o) => colourDistance(o, colour) > 1e-6);
 
   for (let y = 0; y < height; y++) {
+    const gridRow = grid.rows.has(rect.y0 + y);
     for (let x = 0; x < width; x++) {
       const px = getPixel(img, rect.x0 + x, rect.y0 + y);
       if (colourDistance(px, bg) < opts.inkThreshold * 0.5) continue;
+      // Ink sitting on a gridline that is grey and no stronger than a gridline
+      // *is* the gridline. Without this a dark dotted grid gets claimed by the
+      // nearest dark series and shows up as a row of phantom data points.
+      if ((gridRow || grid.columns.has(rect.x0 + x)) && isGray(px, 0.25) &&
+        colourDistance(px, bg) <= grid.faintLimit) {
+        continue;
+      }
       // A pixel closer to another series' colour belongs to that series.
       const dOwn = colourDistance(px, colour);
       let claimed = false;

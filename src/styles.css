@@ -92,8 +92,15 @@ body {
 .layout {
   display: grid;
   gap: 14px;
-  grid-template-columns: 1fr;
+  /* minmax(0, 1fr), not 1fr: a grid track's implicit minimum is its content's
+     min-content width, and the monospace CSV preview would then push the whole
+     page wider than a phone viewport. */
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+}
+
+.layout > * {
+  min-width: 0;
 }
 
 @media (min-width: 880px) {

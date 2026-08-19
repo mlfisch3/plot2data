@@ -103,7 +103,7 @@ export class Stage {
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     const cssWidth = parent.clientWidth;
     const aspect = this.bitmap.height / this.bitmap.width;
-    const cssHeight = Math.max(180, Math.min(cssWidth * aspect, window.innerHeight * 0.62));
+    const cssHeight = Math.max(150, Math.min(cssWidth * aspect, window.innerHeight * 0.6));
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
     this.canvas.width = Math.round(cssWidth * dpr);
