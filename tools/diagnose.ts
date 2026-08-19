@@ -13,7 +13,8 @@ import { detectFrame } from '../src/engine/frame.ts';
 import { detectTicks, medianGap } from '../src/engine/ticks.ts';
 import type { ImageBuffer } from '../src/engine/types.ts';
 
-const CORPUS = resolve(dirname(fileURLToPath(import.meta.url)), '../corpus');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DIRS = [resolve(ROOT, 'corpus'), resolve(ROOT, 'examples/real')];
 
 function load(path: string): ImageBuffer {
   const buf = readFileSync(path);
@@ -26,12 +27,16 @@ function load(path: string): ImageBuffer {
 }
 
 const only = process.argv[2];
-const files = readdirSync(CORPUS)
-  .filter((f) => /\.(png|jpg)$/.test(f))
-  .filter((f) => !only || f.startsWith(only));
+const files = DIRS.flatMap((d) =>
+  readdirSync(d)
+    .filter((f) => /\.(png|jpg)$/.test(f))
+    .filter((f) => !only || f.startsWith(only))
+    .map((f) => resolve(d, f)),
+);
 
-for (const f of files) {
-  const img = load(resolve(CORPUS, f));
+for (const path of files) {
+  const f = path.split('/').pop()!;
+  const img = load(path);
   const frame = detectFrame(img);
   const xs = detectTicks(img, frame, 'bottom');
   const ys = detectTicks(img, frame, 'left');

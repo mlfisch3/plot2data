@@ -149,11 +149,14 @@ export function findLabelBand(
       const y = horizontal ? p : a;
       if (colourDistance(getPixel(img, x, y), bg) >= inkThreshold) count++;
     }
-    if (count > 0) {
+    // A row spanning most of the axis is a line (spine antialiasing, a border,
+    // a gridline), never a row of label text.
+    const lineLike = count >= (hi - lo + 1) * 0.5;
+    if (count > 0 && !lineLike) {
       if (near < 0) near = p;
       far = p;
       emptyRun = 0;
-    } else if (near >= 0 && ++emptyRun >= 3) {
+    } else if (near >= 0 && (lineLike || ++emptyRun >= 3)) {
       break;
     }
   }
@@ -240,28 +243,44 @@ function scanDirection(
 }
 
 /**
- * Reject ticks that break the regular spacing of the majority. Chart ticks are
- * evenly spaced (linearly, or per-decade on a log axis), so an isolated stray
- * blob of ink under the axis is easy to drop.
+ * Keep the largest subset of positions that lie on one arithmetic grid.
+ *
+ * Chart ticks are evenly spaced (linearly, or per decade on a log axis), so the
+ * best-supported (spacing, phase) hypothesis is the real tick grid. Testing
+ * every pair as a hypothesis tolerates both missing ticks and stray ink blobs,
+ * which pairwise neighbour checks do not.
  */
 function keepRegular<T extends { px: number }>(items: T[]): T[] {
   if (items.length < 4) return items;
-  const gaps: number[] = [];
-  for (let i = 1; i < items.length; i++) gaps.push(items[i].px - items[i - 1].px);
-  const median = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
-  if (!(median > 0)) return items;
-  // Accept a gap that is close to the median or a small multiple of it: log
-  // axes legitimately skip positions, and so do axes with rotated labels.
-  const ok = (g: number) => {
-    const ratio = g / median;
-    const nearest = Math.round(ratio);
-    return nearest >= 1 && nearest <= 4 && Math.abs(ratio - nearest) < 0.25;
-  };
-  return items.filter((t, i) => {
-    const prev = i > 0 ? items[i - 1].px : null;
-    const next = i < items.length - 1 ? items[i + 1].px : null;
-    return (prev !== null && ok(t.px - prev)) || (next !== null && ok(next - t.px));
-  });
+  const xs = items.map((t) => t.px);
+  const span = Math.max(...xs) - Math.min(...xs);
+  // Anything finer than this is not a tick grid; without the floor a
+  // sufficiently fine grid fits any scatter of blobs.
+  const minSpacing = Math.max(4, span * 0.03);
+
+  let best: { inliers: T[]; spacing: number } | null = null;
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const d = xs[j] - xs[i];
+      for (let k = 1; k <= 4; k++) {
+        const spacing = d / k;
+        if (spacing < minSpacing) continue;
+        const tol = Math.max(0.8, spacing * 0.12);
+        const inliers = items.filter((t) => {
+          const n = (t.px - xs[i]) / spacing;
+          return Math.abs(n - Math.round(n)) * spacing <= tol;
+        });
+        if (
+          !best ||
+          inliers.length > best.inliers.length ||
+          (inliers.length === best.inliers.length && spacing < best.spacing)
+        ) {
+          best = { inliers, spacing };
+        }
+      }
+    }
+  }
+  return best && best.inliers.length >= 3 ? best.inliers : items;
 }
 
 /** Split ticks into major/minor by length when two clear populations exist. */
@@ -278,6 +297,41 @@ function classifyMajor(ticks: Tick[]): Tick[] {
 }
 
 /**
+ * Choose how wide a gap still belongs inside one label.
+ *
+ * Gaps between the glyphs of one number are much smaller than gaps between
+ * neighbouring labels, so the split point is the largest ratio jump in the
+ * sorted gap list. Deciding it from the image beats any fixed fraction of the
+ * font size, which breaks as soon as the axis is dense or the labels are wide.
+ */
+function chooseMergeGap(present: Int32Array): number {
+  const gaps: number[] = [];
+  let run = 0;
+  let seenInk = false;
+  for (let i = 0; i < present.length; i++) {
+    if (present[i] >= 0) {
+      if (seenInk && run > 0) gaps.push(run);
+      run = 0;
+      seenInk = true;
+    } else if (seenInk) {
+      run++;
+    }
+  }
+  if (gaps.length < 2) return 1;
+  gaps.sort((a, b) => a - b);
+  let bestRatio = 1;
+  let cut = 1;
+  for (let i = 0; i < gaps.length - 1; i++) {
+    const ratio = (gaps[i + 1] + 1) / (gaps[i] + 1);
+    if (ratio > bestRatio) {
+      bestRatio = ratio;
+      cut = gaps[i];
+    }
+  }
+  return bestRatio >= 2 ? cut : 1;
+}
+
+/**
  * Group the ink inside the label band into text blobs and take each blob's
  * bounding-box centre as a tick position.
  */
@@ -288,13 +342,26 @@ function detectLabelGroups(
   band: { near: number; far: number },
   opts: TickOptions,
 ): Array<Tick & { rect: Rect }> {
-  const { lo, hi, horizontal } = axisRange(img, frame, side, 40);
+  // Along-axis margin: enough for an end label centred on the plot edge, not
+  // so much that the perpendicular axis's labels leak into the corner.
+  const scale = Math.max(1, Math.round(Math.min(img.width, img.height) / 450));
+  const { lo, hi, horizontal } = axisRange(img, frame, side, 8 * scale);
   const bg = frame.background;
+
+  // Skip the few pixels next to the plot area: with no spine drawn there, data
+  // ink bleeds across the boundary and would group as a phantom label.
+  const guard = 6;
+  let pLo = horizontal ? Math.max(band.near, frame.rect.y1 + guard) : band.near;
+  let pHi = horizontal ? band.far : Math.min(band.far, frame.rect.x0 - guard);
+  if (pLo > pHi) {
+    pLo = band.near;
+    pHi = band.far;
+  }
 
   const near = new Int32Array(hi - lo + 1).fill(-1);
   const far = new Int32Array(hi - lo + 1).fill(-1);
   for (let a = lo; a <= hi; a++) {
-    for (let p = band.near; p <= band.far; p++) {
+    for (let p = pLo; p <= pHi; p++) {
       const x = horizontal ? a : p;
       const y = horizontal ? p : a;
       if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
@@ -304,9 +371,7 @@ function detectLabelGroups(
     }
   }
 
-  // Merge glyphs of the same number: digits within a fraction of the text size.
-  const textSize = band.far - band.near + 1;
-  const mergeGap = horizontal ? Math.max(3, Math.round(textSize * 0.4)) : Math.max(2, Math.round(textSize * 0.12));
+  const mergeGap = chooseMergeGap(near);
   const maxBlob = Math.round((hi - lo) * 0.4);
 
   const out: Array<Tick & { rect: Rect }> = [];
@@ -327,21 +392,16 @@ function detectLabelGroups(
       j++;
     }
     j = last;
-    let pMin = Infinity;
-    let pMax = -Infinity;
-    for (let k = i; k <= j; k++) {
-      if (near[k] < 0) continue;
-      pMin = Math.min(pMin, near[k]);
-      pMax = Math.max(pMax, far[k]);
-    }
+    // The OCR crop keeps the whole band across the axis so a clipped guard zone
+    // never cuts a glyph (a trailing `%`, say) off the label.
     if (j - i + 1 <= maxBlob) {
       out.push({
         px: lo + (i + j) / 2,
         length: 0,
         major: true,
         rect: horizontal
-          ? { x0: lo + i, x1: lo + j, y0: pMin, y1: pMax }
-          : { x0: pMin, x1: pMax, y0: lo + i, y1: lo + j },
+          ? { x0: lo + i, x1: lo + j, y0: band.near, y1: band.far }
+          : { x0: band.near, x1: band.far, y0: lo + i, y1: lo + j },
       });
     }
     i = j + 1;
@@ -360,17 +420,23 @@ export function detectTicks(
   const spinePos = spine ? Math.round(spine.pos) : side === 'bottom' ? frame.rect.y1 : frame.rect.x0;
   const halfSpine = Math.ceil((spine?.thickness ?? 2) / 2) + 1;
 
+  // Geometric ticks are not filtered for regularity: the run-termination rule
+  // is specific enough that strays are rare, and log axes legitimately carry
+  // minor ticks that lie on no single arithmetic grid. Ticks without a readable
+  // label simply contribute nothing to the calibration fit.
   let direction: 'outward' | 'inward' = 'outward';
-  let ticks = keepRegular(scanDirection(img, frame, side, 'outward', opts));
+  let ticks = scanDirection(img, frame, side, 'outward', opts);
   if (ticks.length < 3) {
-    const inward = keepRegular(scanDirection(img, frame, side, 'inward', opts));
-    if (inward.length > ticks.length) {
+    // Inward ticks share the plot interior with the data, so a wiggly line near
+    // the axis mimics them. Accept them only if they land on a real tick grid.
+    const inward = scanDirection(img, frame, side, 'inward', opts);
+    if (inward.length >= 3 && keepRegular(inward).length >= Math.max(3, inward.length * 0.8)) {
       ticks = inward;
       direction = 'inward';
     }
   }
 
-  if (ticks.length >= 2) {
+  if (ticks.length >= 3) {
     ticks = classifyMajor(ticks);
     const tickLength = Math.max(...ticks.map((t) => t.length));
     const start = direction === 'outward' ? halfSpine + tickLength + 1 : halfSpine;
