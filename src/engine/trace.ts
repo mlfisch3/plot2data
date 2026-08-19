@@ -207,7 +207,8 @@ export function traceCurve(
  * the median vertical ink extent per column - does not: on a spiky series most
  * columns are steep, and their vertical extent is several times the stroke's
  * real width. On the captain's retail-sales chart that estimate read 23 px for a
- * line under 7 px wide, and every uncertainty derived from it was wrong to match.
+ * line about 5.5 px wide, and every uncertainty derived from it was wrong to
+ * match.
  *
  * Only adjacent measured columns contribute, so a dashed line's gaps count
  * towards neither the area nor the length. `path`, when given, is the corrected

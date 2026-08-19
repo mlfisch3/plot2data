@@ -16,7 +16,7 @@
  *
  * It is an estimate and it says so. Where the drawn line is *wider* than the
  * spacing of its own vertices - the captain's monthly chart is drawn with a
- * 6.7 px pen and plots a point every 3.5 px - some kinks are simply not
+ * 5.5 px pen and plots a point every 3.5 px - some kinks are simply not
  * separable from the ink, and the count comes out low. Measured against the
  * charts in `examples/real`, the estimate lands within a factor of about two of
  * the true point count, which is the right order for a default and no more than

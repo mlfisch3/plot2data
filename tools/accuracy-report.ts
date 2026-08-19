@@ -403,9 +403,9 @@ async function main() {
   );
   lines.push(
     '| `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain\'s ' +
-      'own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 6.7 px wide ' +
+      'own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 5.5 px wide ' +
       'and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink: the ' +
-      'automatic point count proposes 293 against a true 331, and says what it counted. Spike amplitude recovered ' +
+      'automatic point count proposes 235 against a true 331, and says what it counted. Spike amplitude recovered ' +
       'rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the ' +
       'mean peak shortfall fell from 4.30% of full scale to 0.01%. |',
   );
@@ -447,7 +447,7 @@ async function main() {
   );
   lines.push(
     '- **The automatic point count is an estimate.** It counts the kinks in the trace, so a line drawn wider than ' +
-      'the spacing of its own data points comes out low - 293 against 331 on the retail-sales chart. Across the ' +
+      'the spacing of its own data points comes out low - 235 against 331 on the retail-sales chart. Across the ' +
       'real screenshots it lands within about a factor of two of the true point count, which is the right order for ' +
       'a default; the count is editable and one point per pixel column is always available.',
   );

@@ -131,7 +131,7 @@ spacing can be read the proposal is one point per pixel column, which is uniform
 Both the count and the mode are yours to overrule.
 
 It is an estimate and it says so. A line drawn wider than the spacing of its own data points hides some of its own vertices: on the
-retail-sales chart it proposes 293 points against a true 331. Across the real screenshots it lands within about a factor of two.
+retail-sales chart it proposes 235 points against a true 331. Across the real screenshots it lands within about a factor of two.
 
 ### Peaks
 
