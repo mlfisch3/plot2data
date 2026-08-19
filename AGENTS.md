@@ -16,7 +16,8 @@ that hosts the same bundle so a Smart Select crop can be shared to it.
   Anything needing the DOM goes in `src/ui/`; OCR reaches the engine through the injected `OcrProvider` interface.
 - **No network at runtime.** The tesseract worker, WASM core and language data are served from the bundle (`npm run assets` assembles
   all of `public/`, which is generated and ignored in full). `dist/` must stay a self-contained static bundle with relative URLs, and the
-  Android app declares no permissions at all, so it cannot reach the network even by mistake.
+  Android app requests no `INTERNET` permission, so it cannot reach the network even by mistake - check with
+  `aapt2 dump badging app-debug.apk | grep uses-permission` after touching the manifest or adding a dependency.
 
 ## Two builds of the same page
 

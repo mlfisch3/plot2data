@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  plot2data has no <uses-permission> entries, and that is deliberate: the app
-  holds no INTERNET permission, so it cannot reach the network even by mistake.
-  Everything it serves comes from WebViewAssetLoader, whose responses are
-  fulfilled from local streams before the network stack is ever consulted.
+  plot2data requests no permissions, and that is deliberate: without INTERNET it
+  cannot reach the network even by mistake. Everything it serves comes from
+  WebViewAssetLoader, whose responses are fulfilled from local streams before the
+  network stack is ever consulted.
+
+  The merged manifest does carry one entry AGP injects on our behalf,
+  <applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION, which androidx
+  declares about itself at signature protection level and grants nobody anything.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 

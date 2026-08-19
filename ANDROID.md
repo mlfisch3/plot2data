@@ -74,7 +74,9 @@ Three other ways in, all of which work the same once the image is loaded:
 
 ## What it does, and does not, have access to
 
-- **No network permission.** The manifest declares no `<uses-permission>` at all, so the app cannot reach the network even by mistake.
+- **No network permission.** The app requests nothing, so it cannot reach the network even by mistake. Checked in the built APK: the
+  only `uses-permission` in the merged manifest is `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which AGP injects for
+  androidx's own broadcast receivers, is signature-protected and declared by this app about itself. There is no `INTERNET`.
   Everything is served from the APK by the asset loader, whose responses are fulfilled from local streams before the network stack is
   consulted. On top of that, the `WebViewClient` refuses any request the asset loader did not serve, rather than letting it fall through.
 - No file access from the WebView (`allowFileAccess` and `allowContentAccess` are off); universal access from file URLs is never enabled.
