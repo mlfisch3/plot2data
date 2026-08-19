@@ -9,9 +9,20 @@
 
 import { describeAxis, formatValue } from './calibration.ts';
 import type { Analysis } from './pipeline.ts';
+import { writeXlsx, type Cell } from './xlsx.ts';
 import type { Calibration, DataSeries } from './types.ts';
 
 export const TOOL_VERSION = '0.1.0';
+
+/** Delimiters offered by the UI. Anything else a caller passes is used as-is. */
+export const DELIMITERS = {
+  comma: ',',
+  tab: '\t',
+  semicolon: ';',
+  pipe: '|',
+} as const;
+
+export type DelimiterName = keyof typeof DELIMITERS;
 
 export interface CsvOptions {
   /** Decimal places for the data columns. */
@@ -19,6 +30,13 @@ export interface CsvOptions {
   /** Source image file name, recorded in the header. */
   source?: string;
   calibration?: Calibration;
+  /** Column separator. Defaults to a comma. */
+  delimiter?: string;
+  /**
+   * Write the column names and the provenance comments. Off means numbers
+   * only, for pasting straight into a sheet that already has its own headings.
+   */
+  header?: boolean;
 }
 
 function fmt(v: number, precision: number): string {
@@ -59,10 +77,10 @@ export function csvHeader(
   lines.push(`# ${describeAxis(cal.x, 'x', analysis.units.x, [rect.x0, rect.x1])}`);
   lines.push(`# ${describeAxis(cal.y, 'y', analysis.units.y, [rect.y1, rect.y0])}`);
   lines.push(
-    `# x anchors: pixel ${cal.x.a.px.toFixed(1)} = ${formatValue(cal.x.a.value)}, pixel ${cal.x.b.px.toFixed(1)} = ${formatValue(cal.x.b.value)} (${cal.x.a.source})`,
+    `# X1: pixel ${cal.x.a.px.toFixed(1)} = ${formatValue(cal.x.a.value)}, X2: pixel ${cal.x.b.px.toFixed(1)} = ${formatValue(cal.x.b.value)} (${cal.x.a.source})`,
   );
   lines.push(
-    `# y anchors: pixel ${cal.y.a.px.toFixed(1)} = ${formatValue(cal.y.a.value)}, pixel ${cal.y.b.px.toFixed(1)} = ${formatValue(cal.y.b.value)} (${cal.y.a.source})`,
+    `# Y1: pixel ${cal.y.a.px.toFixed(1)} = ${formatValue(cal.y.a.value)}, Y2: pixel ${cal.y.b.px.toFixed(1)} = ${formatValue(cal.y.b.value)} (${cal.y.a.source})`,
   );
   if (cal.x.multiplier !== 1 || cal.x.offset !== 0) {
     lines.push(`# x annotation applied: multiplier ${cal.x.multiplier}, offset ${cal.x.offset}`);
@@ -120,15 +138,15 @@ export function compact(v: number): string {
 }
 
 /**
- * Serialise series to CSV on a shared x grid.
+ * The numeric table behind every export format.
  *
- * Curve-mode series share the resample grid so they line up in one table.
- * Marker-mode series have their own x positions, so each gets its own x column.
+ * Curve series share one resample grid, so they line up in one table under a
+ * single x column. Marker series have their own x positions - those are real
+ * sample points, and putting them on a shared grid would be an invention - so
+ * each gets its own pair of columns.
  */
-export function toCsv(analysis: Analysis, series: DataSeries[], options: CsvOptions = {}): string {
-  const precision = options.precision ?? 6;
-  const lines = csvHeader(analysis, series, options);
-  if (series.length === 0) return `${lines.join('\n')}\n`;
+export function toTable(series: DataSeries[]): { columns: string[]; rows: Array<Array<number | null>> } {
+  if (series.length === 0) return { columns: [], rows: [] };
 
   const shared =
     series.every((s) => s.mode === 'curve') &&
@@ -136,26 +154,83 @@ export function toCsv(analysis: Analysis, series: DataSeries[], options: CsvOpti
     series.every((s) => s.points.every((p, i) => Math.abs(p.x - series[0].points[i].x) < 1e-9));
 
   if (shared) {
-    lines.push(['x', ...series.map((s) => s.name)].join(','));
-    for (let i = 0; i < series[0].points.length; i++) {
-      lines.push(
-        [fmt(series[0].points[i].x, precision), ...series.map((s) => fmt(s.points[i].y, precision))].join(','),
-      );
-    }
-    return `${lines.join('\n')}\n`;
+    const columns = ['x', ...series.map((s) => s.name)];
+    const rows = series[0].points.map((_, i) => [
+      cellOf(series[0].points[i].x),
+      ...series.map((s) => cellOf(s.points[i].y)),
+    ]);
+    return { columns, rows };
   }
 
-  const header: string[] = [];
-  for (const s of series) header.push(`${s.name}_x`, `${s.name}_y`);
-  lines.push(header.join(','));
-  const rows = Math.max(...series.map((s) => s.points.length));
-  for (let i = 0; i < rows; i++) {
-    const cells: string[] = [];
+  const columns: string[] = [];
+  for (const s of series) columns.push(`${s.name}_x`, `${s.name}_y`);
+  const height = Math.max(...series.map((s) => s.points.length));
+  const rows: Array<Array<number | null>> = [];
+  for (let i = 0; i < height; i++) {
+    const row: Array<number | null> = [];
     for (const s of series) {
       const p = s.points[i];
-      cells.push(p ? fmt(p.x, precision) : '', p ? fmt(p.y, precision) : '');
+      row.push(p ? cellOf(p.x) : null, p ? cellOf(p.y) : null);
     }
-    lines.push(cells.join(','));
+    rows.push(row);
+  }
+  return { columns, rows };
+}
+
+/** A value the grid ran past is a blank cell, not a zero and not a NaN. */
+function cellOf(v: number): number | null {
+  return Number.isFinite(v) ? v : null;
+}
+
+/** Serialise series to delimited text. */
+export function toCsv(analysis: Analysis, series: DataSeries[], options: CsvOptions = {}): string {
+  const precision = options.precision ?? 6;
+  const delimiter = options.delimiter ?? DELIMITERS.comma;
+  const withHeader = options.header ?? true;
+  const lines: string[] = withHeader ? csvHeader(analysis, series, options) : [];
+  const table = toTable(series);
+  if (table.columns.length === 0) return `${lines.join('\n')}\n`;
+
+  if (withHeader) lines.push(table.columns.map((c) => quote(c, delimiter)).join(delimiter));
+  for (const row of table.rows) {
+    lines.push(row.map((v) => (v === null ? '' : fmt(v, precision))).join(delimiter));
   }
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Quote a field that would otherwise break the delimiter.
+ *
+ * Only names can need this - a formatted number never contains a separator -
+ * but a user may call a series anything at all, including "sales, net".
+ */
+function quote(value: string, delimiter: string): string {
+  if (!value.includes(delimiter) && !/["\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Serialise to a real `.xlsx` workbook.
+ *
+ * The numbers go on the first sheet as numbers, not as text, so a chart drawn
+ * from them works straight away. The provenance that heads the CSV goes on a
+ * second sheet rather than above the table, because rows of prose over a data
+ * table is exactly what makes a spreadsheet awkward to use.
+ */
+export function toXlsx(analysis: Analysis, series: DataSeries[], options: CsvOptions = {}): Uint8Array {
+  const withHeader = options.header ?? true;
+  const table = toTable(series);
+  const data: Cell[][] = [];
+  if (withHeader && table.columns.length) data.push(table.columns);
+  for (const row of table.rows) data.push(row);
+  if (data.length === 0) data.push(['no series were selected']);
+
+  const sheets = [{ name: 'data', rows: data }];
+  if (withHeader) {
+    sheets.push({
+      name: 'plot2data',
+      rows: csvHeader(analysis, series, options).map((line) => [line.replace(/^# /, '')]),
+    });
+  }
+  return writeXlsx(sheets);
 }

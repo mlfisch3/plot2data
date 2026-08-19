@@ -98,7 +98,19 @@ export {
   type WarningCode,
 } from './pipeline.ts';
 export { suggestSampling, type SamplingSuggestion } from './sampling.ts';
-export { compact, csvHeader, describeUncertainty, toCsv, TOOL_VERSION, type CsvOptions } from './csv.ts';
+export {
+  compact,
+  csvHeader,
+  describeUncertainty,
+  toCsv,
+  toTable,
+  toXlsx,
+  DELIMITERS,
+  TOOL_VERSION,
+  type CsvOptions,
+  type DelimiterName,
+} from './csv.ts';
+export { writeXlsx, columnName, type Cell, type Sheet } from './xlsx.ts';
 export {
   colourDistance,
   createImage,

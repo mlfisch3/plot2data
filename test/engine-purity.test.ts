@@ -13,6 +13,22 @@ import { resolve } from 'node:path';
 const ENGINE = resolve(import.meta.dirname, '../src/engine');
 const files = readdirSync(ENGINE).filter((f) => f.endsWith('.ts'));
 
+/**
+ * Strip what is not code.
+ *
+ * Comments explain why these APIs are absent, and string literals carry things
+ * like the OOXML `officeDocument` relationship URL - neither is a DOM call, and
+ * a bare substring search over the whole file cannot tell the difference.
+ */
+function strip(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
 const FORBIDDEN = [
   'document',
   'window',
@@ -31,12 +47,10 @@ describe('engine purity', () => {
 
   for (const file of files) {
     it(`${file} touches no DOM API`, () => {
-      const source = readFileSync(resolve(ENGINE, file), 'utf8')
-        // Comments may name these APIs when explaining why they are absent.
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/\/\/.*$/gm, '');
+      const source = strip(readFileSync(resolve(ENGINE, file), 'utf8'));
       for (const symbol of FORBIDDEN) {
-        expect(source, `${file} must not use ${symbol}`).not.toContain(symbol);
+        const used = new RegExp(`(^|[^.\\w$])${symbol.replace('(', '\\(')}(?![\\w$])`).test(source);
+        expect(used, `${file} must not use ${symbol}`).toBe(false);
       }
     });
 
