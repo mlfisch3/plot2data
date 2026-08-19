@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { traceCurve } from '../src/engine/trace.ts';
-import type { SeriesMask } from '../src/engine/segment.ts';
+import { traceCurve, traceMarkers } from '../src/engine/trace.ts';
+import { findComponents, type SeriesMask } from '../src/engine/segment.ts';
 
 /**
  * Rasterise a polyline into an alpha mask by supersampling.
@@ -78,6 +78,50 @@ function rms(mask: SeriesMask, path: (x: number) => number, margin = 4): number 
   }
   return Math.sqrt(sse / Math.max(1, n));
 }
+
+/** A filled disc rasterised by supersampling, at a deliberately sub-pixel centre. */
+function discMask(width: number, height: number, cx: number, cy: number, r: number): SeriesMask {
+  const alpha = new Float32Array(width * height);
+  const N = 8;
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      let hit = 0;
+      for (let sy = 0; sy < N; sy++) {
+        for (let sx = 0; sx < N; sx++) {
+          const x = px - 0.5 + (sx + 0.5) / N;
+          const y = py - 0.5 + (sy + 0.5) / N;
+          if (Math.hypot(x - cx, y - cy) <= r) hit++;
+        }
+      }
+      alpha[py * width + px] = hit / (N * N);
+    }
+  }
+  return { colour: { r: 0, g: 0, b: 0 }, rect: { x0: 0, y0: 0, x1: width - 1, y1: height - 1 }, alpha, width, height };
+}
+
+describe('traceMarkers', () => {
+  it('returns the centre of mass, not the middle of the bounding box', () => {
+    // A centre deliberately off the pixel grid: the bounding box of the pixels
+    // this covers is centred on a half-pixel, and only the alpha weighting can
+    // put the point back where the marker was actually drawn.
+    const cx = 12.37;
+    const cy = 9.82;
+    const mask = discMask(26, 22, cx, cy, 3.4);
+    const components = findComponents(mask);
+    expect(components).toHaveLength(1);
+    const marker = traceMarkers(components).points[0];
+    expect(marker.px).toBeCloseTo(cx, 1);
+    expect(marker.py).toBeCloseTo(cy, 1);
+
+    const bounds = components[0].bounds;
+    const boxCx = (bounds.x0 + bounds.x1) / 2;
+    const boxCy = (bounds.y0 + bounds.y1) / 2;
+    // The bounding-box answer is measurably worse, which is why it is not used.
+    expect(Math.hypot(marker.px - cx, marker.py - cy)).toBeLessThan(
+      Math.hypot(boxCx - cx, boxCy - cy),
+    );
+  });
+});
 
 describe('traceCurve on a known path', () => {
   it('recovers a flat line to well under a tenth of a pixel', () => {
