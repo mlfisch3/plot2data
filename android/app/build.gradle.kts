@@ -41,6 +41,11 @@ android {
             // Deliberate: the dependency versions are pinned to ones that build
             // against compileSdk 35. This check only says newer ones exist.
             "GradleDependency",
+            // Wrong here: it wants mipmap-anydpi-v26 merged into mipmap-anydpi
+            // because minSdk is already 26, but aapt does not find the adaptive
+            // icon there and the build fails outright. See the note in
+            // res/mipmap-anydpi-v26/ic_launcher.xml.
+            "ObsoleteSdkInt",
         )
     }
 

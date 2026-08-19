@@ -202,6 +202,8 @@ function clearImage(): void {
   state.choices = [];
   forgetSession();
   stage.setImage(null, null);
+  // The entry we are standing on no longer describes anything reachable.
+  replaceStep('empty');
   render();
 }
 
@@ -365,7 +367,10 @@ async function accept(file: File, incoming?: IncomingImage): Promise<void> {
     state.analysis = null;
     state.calibration = null;
     state.choices = [];
-    if (state.phase === 'empty') pushStep('cropping');
+    // Push only from the root entry; otherwise relabel the step we are standing
+    // on, so loading a second image never stacks up entries the back button then
+    // has to be pressed through twice.
+    if (depth === 0) pushStep('cropping');
     else replaceStep('cropping');
     showCropping();
     saveSession();
@@ -403,9 +408,11 @@ installHost({
       void takeIncoming(images[0]);
       return;
     }
-    state.choices = images;
-    // A new share always starts over, whatever the user was in the middle of.
+    // A new share always starts over, whatever the user was in the middle of -
+    // and the reset has to come before the choices are handed over, because it
+    // clears those too.
     if (state.phase !== 'empty') clearImage();
+    state.choices = images;
     render();
   },
 });

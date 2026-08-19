@@ -93,16 +93,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val restored = savedInstanceState?.getString(KEY_TOKEN)
-        if (restored != null) {
-            // The process was killed while an image was loaded. The cached copy
-            // outlives the URI grant, so the image comes straight back.
+        if (savedInstanceState == null) {
+            consume(intent)
+            return
+        }
+        // Coming back from the process being killed. The launch intent is still
+        // attached, but its URI grant died with the old task, so re-reading it
+        // would only produce a failure toast; the cached copy is what survives.
+        savedInstanceState.getString(KEY_TOKEN)?.let { token ->
             io.execute {
-                val image = images.find(restored)
+                val image = images.find(token)
                 runOnUiThread { if (image != null) deliver(listOf(image)) }
             }
         }
-        consume(intent)
     }
 
     override fun onNewIntent(intent: Intent) {

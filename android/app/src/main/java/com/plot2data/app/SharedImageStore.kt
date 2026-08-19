@@ -58,7 +58,9 @@ class SharedImageStore(context: Context) {
         }
 
         val mime = sniffMime(target) ?: resolver.getType(uri) ?: DEFAULT_MIME
-        val name = displayName(uri) ?: defaultNameFor(mime)
+        // The metadata file is line-based, so a name may not contain a line break.
+        val name = displayName(uri)?.replace(WHITESPACE, " ")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: defaultNameFor(mime)
         val image = SharedImage(token, name, mime, written)
         File(dir, "$token.meta").writeText("${image.mime}\n${image.name}")
         prune()
@@ -127,6 +129,7 @@ class SharedImageStore(context: Context) {
     }
 
     private companion object {
+        val WHITESPACE = Regex("\\s+")
         const val DIR_NAME = "shared"
         const val DEFAULT_MIME = "image/png"
         const val KEEP = 3
