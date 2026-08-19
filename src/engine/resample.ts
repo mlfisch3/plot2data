@@ -13,27 +13,50 @@ import type {
   Uncertainty,
 } from './types.ts';
 
-export type ResampleMode = { kind: 'native' } | { kind: 'uniform'; count: number };
+export type ResampleMode =
+  | { kind: 'native' }
+  | {
+      kind: 'uniform';
+      count: number;
+      /**
+       * Pixel range the grid spans. Given one, every series lands on the *same*
+       * x values, which is what lets the export be one table with one x column.
+       * Omitted, each series spans its own extent.
+       */
+      range?: readonly [number, number];
+    };
 
 /**
- * Resample a traced path uniformly along the axis's own coordinate: evenly in x
- * for a linear axis, evenly in log10(x) for a logarithmic one. That is the
- * spacing a reader of the chart would consider uniform, and it keeps the
- * sampling density constant in pixels, where the accuracy actually lives.
+ * Resample a traced path onto a uniform grid along the axis's own coordinate.
+ *
+ * Uniform in pixels is uniform in x on a linear axis and uniform in log10(x) on
+ * a logarithmic one, which is what "evenly spaced" means on the axis as drawn.
+ * It also keeps the sampling density constant in pixels, where the accuracy
+ * actually lives.
+ *
+ * Where the grid runs past a series' own extent the point is emitted as NaN
+ * rather than extrapolated, so a shorter series leaves the cell blank instead
+ * of claiming a value the chart never drew.
  */
 export function resamplePixels(points: TracePoint[], mode: ResampleMode): TracePoint[] {
   if (points.length === 0) return [];
   const sorted = [...points].sort((a, b) => a.px - b.px);
   if (mode.kind === 'native' || mode.count <= 1) return sorted;
 
-  const lo = sorted[0].px;
-  const hi = sorted[sorted.length - 1].px;
+  const first = sorted[0].px;
+  const last = sorted[sorted.length - 1].px;
+  const lo = mode.range ? mode.range[0] : first;
+  const hi = mode.range ? mode.range[1] : last;
   if (!(hi > lo)) return sorted;
 
   const out: TracePoint[] = [];
   let j = 0;
   for (let i = 0; i < mode.count; i++) {
     const px = lo + ((hi - lo) * i) / (mode.count - 1);
+    if (px < first - 0.5 || px > last + 0.5) {
+      out.push({ px, py: NaN, weight: 0, interpolated: true });
+      continue;
+    }
     while (j < sorted.length - 2 && sorted[j + 1].px < px) j++;
     const a = sorted[j];
     const b = sorted[Math.min(j + 1, sorted.length - 1)];

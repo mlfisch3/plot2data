@@ -23,6 +23,7 @@ import {
 } from './segment.ts';
 import { traceCurve, traceMarkers, type TraceOptions } from './trace.ts';
 import { calibrateSeries, type ResampleMode } from './resample.ts';
+import { suggestSampling, type SamplingSuggestion } from './sampling.ts';
 import type {
   AxisScale,
   Calibration,
@@ -290,23 +291,70 @@ export interface BuildOptions {
   xScale?: AxisScale;
   yScale?: AxisScale;
   names?: string[];
+  /** Series indices to build; the rest are left out entirely. */
+  include?: ReadonlySet<number>;
+}
+
+/** The traced series in image coordinates rather than mask-local ones. */
+function inImageSpace(analysis: Analysis): TracedSeries[] {
+  return analysis.series.map((s) => ({
+    ...s.traced,
+    points: s.traced.points.map((p) => ({
+      ...p,
+      px: p.px + s.mask.rect.x0,
+      py: p.py + s.mask.rect.y0,
+    })),
+  }));
+}
+
+/**
+ * The pixel range every curve series is resampled across.
+ *
+ * One grid for all of them, so the export is a single table with a single x
+ * column rather than a column pair per series. Markers keep their own x, since
+ * those are real sample positions and moving them onto a grid would be an
+ * invention.
+ */
+export function sharedSpan(analysis: Analysis): [number, number] | null {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const s of inImageSpace(analysis)) {
+    if (s.mode !== 'curve') continue;
+    for (const p of s.points) {
+      if (p.px < lo) lo = p.px;
+      if (p.px > hi) hi = p.px;
+    }
+  }
+  return hi > lo ? [lo, hi] : null;
+}
+
+/**
+ * How many points to export, proposed from the drawn line itself.
+ *
+ * Cheap, and independent of the calibration, so the UI can ask for it once and
+ * offer it as a default the user is free to overrule.
+ */
+export function suggestPointCount(analysis: Analysis): SamplingSuggestion {
+  const span = sharedSpan(analysis);
+  const width = span ? span[1] - span[0] : analysis.frame.rect.x1 - analysis.frame.rect.x0;
+  return suggestSampling(inImageSpace(analysis), width);
 }
 
 /** Apply a calibration to the analysed series. Cheap: safe to call per edit. */
 export function buildSeries(analysis: Analysis, options: BuildOptions = {}): DataSeries[] {
   const cal = options.calibration ?? analysis.calibration;
   if (!isValid(cal.x) || !isValid(cal.y)) return [];
-  const mode = options.resample ?? { kind: 'uniform' as const, count: 100 };
-  return analysis.series.map((s, i) => {
-    // The trace lives in mask-local coordinates; shift it into image space.
-    const shifted: TracedSeries = {
-      ...s.traced,
-      points: s.traced.points.map((p) => ({
-        ...p,
-        px: p.px + s.mask.rect.x0,
-        py: p.py + s.mask.rect.y0,
-      })),
-    };
-    return calibrateSeries(shifted, cal, mode, options.names?.[i] ?? `series_${i + 1}`);
+  const requested = options.resample ?? { kind: 'uniform' as const, count: 100 };
+  const span = sharedSpan(analysis);
+  const mode: ResampleMode =
+    requested.kind === 'uniform' && !requested.range && span
+      ? { ...requested, range: span }
+      : requested;
+  const traced = inImageSpace(analysis);
+  const out: DataSeries[] = [];
+  traced.forEach((s, i) => {
+    if (options.include && !options.include.has(i)) return;
+    out.push(calibrateSeries(s, cal, mode, options.names?.[i] ?? `series_${i + 1}`));
   });
+  return out;
 }

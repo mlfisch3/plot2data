@@ -88,6 +88,8 @@ export {
 export {
   analyse,
   buildSeries,
+  sharedSpan,
+  suggestPointCount,
   type AnalyseOptions,
   type Analysis,
   type AnalysedSeries,
@@ -95,6 +97,7 @@ export {
   type Warning,
   type WarningCode,
 } from './pipeline.ts';
+export { suggestSampling, type SamplingSuggestion } from './sampling.ts';
 export { compact, csvHeader, describeUncertainty, toCsv, TOOL_VERSION, type CsvOptions } from './csv.ts';
 export {
   colourDistance,
