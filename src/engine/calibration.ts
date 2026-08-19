@@ -1,0 +1,262 @@
+/**
+ * Pixel-to-data calibration.
+ *
+ * Two rules drive this module, and both exist to stop the tool being silently
+ * wrong:
+ *
+ * 1. The mapping is always expressible as two anchors the user can see and
+ *    edit. Whatever fitting happens underneath, what ships to the CSV is a
+ *    two-anchor mapping the user has had the chance to check.
+ * 2. Anchors are pre-filled by a *least-squares fit over every readable tick*,
+ *    not by trusting two of them. Real charts round their printed tick values
+ *    (0, 4k, 9k, 13k, 18k, 22k for evenly spaced pixels), so a two-point fit off
+ *    the extremes inherits the rounding error of exactly those two labels. The
+ *    fit residual is reported so a misread label shows up as a warning instead
+ *    of a wrong number.
+ */
+
+import type {
+  Anchor,
+  AxisCalibration,
+  AxisScale,
+  AxisSide,
+  LabelledTick,
+  ScaleFitReport,
+} from './types.ts';
+
+/** A pixel position with a known data value, used as fit input. */
+export interface FitSample {
+  px: number;
+  value: number;
+}
+
+export interface AxisFit {
+  scale: AxisScale;
+  /** value = slope * px + intercept, in the scale's own space (log10 for log). */
+  slope: number;
+  intercept: number;
+  /** RMS residual in the scale's own space. */
+  residual: number;
+  /** Residual as a fraction of the full data range across the fitted pixels. */
+  relativeResidual: number;
+  samples: number;
+}
+
+function leastSquares(samples: FitSample[], transform: (v: number) => number): AxisFit | null {
+  const pts = samples
+    .map((s) => ({ px: s.px, y: transform(s.value) }))
+    .filter((p) => Number.isFinite(p.y) && Number.isFinite(p.px));
+  const n = pts.length;
+  if (n < 2) return null;
+  let sx = 0;
+  let sy = 0;
+  for (const p of pts) {
+    sx += p.px;
+    sy += p.y;
+  }
+  const mx = sx / n;
+  const my = sy / n;
+  let sxx = 0;
+  let sxy = 0;
+  for (const p of pts) {
+    sxx += (p.px - mx) * (p.px - mx);
+    sxy += (p.px - mx) * (p.y - my);
+  }
+  if (Math.abs(sxx) < 1e-9) return null;
+  const slope = sxy / sxx;
+  const intercept = my - slope * mx;
+  let sse = 0;
+  for (const p of pts) {
+    const e = p.y - (slope * p.px + intercept);
+    sse += e * e;
+  }
+  const residual = Math.sqrt(sse / n);
+  const spanPx = Math.max(...pts.map((p) => p.px)) - Math.min(...pts.map((p) => p.px));
+  const spanValue = Math.abs(slope * spanPx);
+  return {
+    scale: 'linear',
+    slope,
+    intercept,
+    residual,
+    relativeResidual: spanValue > 0 ? residual / spanValue : Infinity,
+    samples: n,
+  };
+}
+
+/**
+ * Choose linear or log by comparing normalised residuals.
+ *
+ * Two labelled ticks fit both models exactly, so with fewer than three samples
+ * we refuse to guess and return linear with `ambiguous: true`; the UI makes the
+ * toggle prominent in that state.
+ */
+export function fitAxis(samples: FitSample[]): { fit: AxisFit; report: ScaleFitReport } | null {
+  const linear = leastSquares(samples, (v) => v);
+  if (!linear) return null;
+
+  const positive = samples.every((s) => s.value > 0);
+  const log = positive ? leastSquares(samples, (v) => Math.log10(v)) : null;
+
+  if (samples.length < 3 || !log) {
+    return {
+      fit: linear,
+      report: {
+        linearResidual: linear.relativeResidual,
+        logResidual: log ? log.relativeResidual : null,
+        samples: samples.length,
+        chosen: 'linear',
+        ambiguous: samples.length < 3,
+      },
+    };
+  }
+
+  // Require the winner to be clearly better; a near-tie means the data does not
+  // actually distinguish the models (for example a short span on a log axis).
+  const chosen: AxisScale = log.relativeResidual < linear.relativeResidual * 0.25 ? 'log' : 'linear';
+  const ambiguous =
+    Math.abs(log.relativeResidual - linear.relativeResidual) <
+    Math.max(log.relativeResidual, linear.relativeResidual) * 0.25;
+  const winner = chosen === 'log' ? { ...log, scale: 'log' as const } : linear;
+  return {
+    fit: winner,
+    report: {
+      linearResidual: linear.relativeResidual,
+      logResidual: log.relativeResidual,
+      samples: samples.length,
+      chosen,
+      ambiguous,
+    },
+  };
+}
+
+/**
+ * Turn a fit into the two visible anchors, evaluated at the extreme fitted
+ * pixel positions so the numbers the user sees line up with the plot edges.
+ */
+export function anchorsFromFit(
+  fit: AxisFit,
+  pxLo: number,
+  pxHi: number,
+): { a: Anchor; b: Anchor } {
+  const at = (px: number) => {
+    const y = fit.slope * px + fit.intercept;
+    return fit.scale === 'log' ? Math.pow(10, y) : y;
+  };
+  return {
+    a: { px: pxLo, value: at(pxLo), source: 'ocr' },
+    b: { px: pxHi, value: at(pxHi), source: 'ocr' },
+  };
+}
+
+/**
+ * Build a calibration for one axis from whatever labelled ticks were read.
+ * Falls back to a default 0..1 mapping over the plot extent when nothing was
+ * readable - the user then types the two values in.
+ */
+export function calibrateAxis(
+  side: AxisSide,
+  labelled: LabelledTick[],
+  pxLo: number,
+  pxHi: number,
+  override?: { scale?: AxisScale; multiplier?: number; offset?: number },
+): AxisCalibration {
+  const samples = labelled
+    .filter((t): t is LabelledTick & { value: number } => typeof t.value === 'number')
+    .map((t) => ({ px: t.px, value: t.value }));
+
+  const fitted = fitAxis(samples);
+  const multiplier = override?.multiplier ?? 1;
+  const offset = override?.offset ?? 0;
+
+  if (!fitted) {
+    return {
+      side,
+      scale: override?.scale ?? 'linear',
+      a: { px: pxLo, value: 0, source: 'default' },
+      b: { px: pxHi, value: 1, source: 'default' },
+      multiplier,
+      offset,
+      scaleSource: override?.scale ? 'manual' : 'default',
+    };
+  }
+
+  let fit = fitted.fit;
+  if (override?.scale && override.scale !== fit.scale) {
+    const refit = leastSquares(
+      samples,
+      override.scale === 'log' ? (v) => Math.log10(v) : (v) => v,
+    );
+    if (refit) fit = { ...refit, scale: override.scale };
+  }
+
+  const { a, b } = anchorsFromFit(fit, pxLo, pxHi);
+  return {
+    side,
+    scale: fit.scale,
+    a,
+    b,
+    multiplier,
+    offset,
+    scaleSource: override?.scale ? 'manual' : 'fit',
+    scaleFit: fitted.report,
+  };
+}
+
+/** Map a pixel position to a data value through a calibration. */
+export function pixelToValue(cal: AxisCalibration, px: number): number {
+  const t = (px - cal.a.px) / (cal.b.px - cal.a.px);
+  let raw: number;
+  if (cal.scale === 'log') {
+    const la = Math.log10(cal.a.value);
+    const lb = Math.log10(cal.b.value);
+    raw = Math.pow(10, la + t * (lb - la));
+  } else {
+    raw = cal.a.value + t * (cal.b.value - cal.a.value);
+  }
+  return raw * cal.multiplier + cal.offset;
+}
+
+/** Inverse of `pixelToValue`. */
+export function valueToPixel(cal: AxisCalibration, value: number): number {
+  const raw = (value - cal.offset) / cal.multiplier;
+  let t: number;
+  if (cal.scale === 'log') {
+    const la = Math.log10(cal.a.value);
+    const lb = Math.log10(cal.b.value);
+    t = (Math.log10(raw) - la) / (lb - la);
+  } else {
+    t = (raw - cal.a.value) / (cal.b.value - cal.a.value);
+  }
+  return cal.a.px + t * (cal.b.px - cal.a.px);
+}
+
+/** Data units per pixel at `px`. On a log axis this varies along the axis. */
+export function scaleAt(cal: AxisCalibration, px: number): number {
+  const h = 0.5;
+  return Math.abs(pixelToValue(cal, px + h) - pixelToValue(cal, px - h));
+}
+
+/** True when the anchors describe a usable, non-degenerate mapping. */
+export function isValid(cal: AxisCalibration): boolean {
+  if (!Number.isFinite(cal.a.value) || !Number.isFinite(cal.b.value)) return false;
+  if (cal.a.px === cal.b.px) return false;
+  if (cal.a.value === cal.b.value) return false;
+  if (cal.scale === 'log' && (cal.a.value <= 0 || cal.b.value <= 0)) return false;
+  return true;
+}
+
+/** Human-readable one-line summary of the mapping, shown live in the UI. */
+export function describeAxis(cal: AxisCalibration, name: string, unit?: string): string {
+  const lo = pixelToValue(cal, cal.a.px);
+  const hi = pixelToValue(cal, cal.b.px);
+  const u = unit ? ` ${unit}` : '';
+  return `${name}: ${formatValue(lo)}${u} to ${formatValue(hi)}${u}, ${cal.scale}`;
+}
+
+export function formatValue(v: number): string {
+  if (!Number.isFinite(v)) return 'n/a';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1e5 || a < 1e-3) return v.toExponential(3).replace(/e([+-])(\d)$/, 'e$10$2');
+  return String(Number(v.toPrecision(6)));
+}
