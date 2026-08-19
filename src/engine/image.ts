@@ -79,23 +79,36 @@ export function cropImage(img: ImageBuffer, rect: Rect): ImageBuffer {
 }
 
 /**
- * Nearest-neighbour-free box upscale by an integer factor.
- * OCR accuracy on small chart labels improves a lot with a 3-4x upscale.
+ * Bilinear upscale by an integer factor.
+ *
+ * Recognisers read small chart labels far better when the upscale is smooth:
+ * nearest-neighbour turns a 9 px digit into a staircase of hard blocks, and the
+ * classifier sees the staircase rather than the glyph.
  */
 export function scaleImage(img: ImageBuffer, factor: number): ImageBuffer {
   const f = Math.max(1, Math.round(factor));
   if (f === 1) return img;
   const out = createImage(img.width * f, img.height * f);
+  const sample = (x: number, y: number, c: number): number => {
+    const cx = Math.max(0, Math.min(img.width - 1, x));
+    const cy = Math.max(0, Math.min(img.height - 1, y));
+    return img.data[(cy * img.width + cx) * 4 + c];
+  };
   for (let y = 0; y < out.height; y++) {
-    const sy = Math.floor(y / f);
+    // Sample at pixel centres so the output is not shifted by half a pixel.
+    const sy = (y + 0.5) / f - 0.5;
+    const y0 = Math.floor(sy);
+    const ty = sy - y0;
     for (let x = 0; x < out.width; x++) {
-      const sx = Math.floor(x / f);
-      const si = idx(img, sx, sy);
-      const di = idx(out, x, y);
-      out.data[di] = img.data[si];
-      out.data[di + 1] = img.data[si + 1];
-      out.data[di + 2] = img.data[si + 2];
-      out.data[di + 3] = img.data[si + 3];
+      const sx = (x + 0.5) / f - 0.5;
+      const x0 = Math.floor(sx);
+      const tx = sx - x0;
+      const di = (y * out.width + x) * 4;
+      for (let c = 0; c < 4; c++) {
+        const top = sample(x0, y0, c) * (1 - tx) + sample(x0 + 1, y0, c) * tx;
+        const bottom = sample(x0, y0 + 1, c) * (1 - tx) + sample(x0 + 1, y0 + 1, c) * tx;
+        out.data[di + c] = Math.round(top * (1 - ty) + bottom * ty);
+      }
     }
   }
   return out;

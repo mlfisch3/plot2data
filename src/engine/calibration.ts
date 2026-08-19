@@ -112,7 +112,11 @@ function robustLeastSquares(
   if (pts.length < 4) return full;
   const range = Math.max(...pts.map((p) => p.y)) - Math.min(...pts.map((p) => p.y));
   if (!(range > 0)) return full;
-  const tol = range * 0.02;
+  // Tolerance from what the labels can actually tell us, not from their spread:
+  // a single wild misread inflates the spread and then hides inside the wider
+  // tolerance it created. Ticks are placed to about a pixel, and printed values
+  // are rounded to their own last digit; those two bound the honest error.
+  const quantum = inferQuantum(pts.map((p) => p.y));
 
   let best: FitSample[] = [];
   for (let i = 0; i < pts.length; i++) {
@@ -121,6 +125,7 @@ function robustLeastSquares(
       if (Math.abs(dx) < 1e-9) continue;
       const slope = (pts[j].y - pts[i].y) / dx;
       const intercept = pts[i].y - slope * pts[i].s.px;
+      const tol = Math.max(Math.abs(slope) * 3, quantum * 0.6, range * 1e-9);
       const inliers = pts
         .filter((p) => Math.abs(p.y - (slope * p.s.px + intercept)) <= tol)
         .map((p) => p.s);
@@ -133,6 +138,23 @@ function robustLeastSquares(
   if (!trimmed || trimmed.relativeResidual >= full.relativeResidual * 0.4) return full;
   const kept = new Set(best);
   return { ...trimmed, dropped: samples.filter((s) => !kept.has(s)) };
+}
+
+/**
+ * The step the printed labels are quantised to: 0.01 for `0.09, 0.19, 0.28`,
+ * 1000 for `0, 4k, 9k, 13k`. Half of it bounds how far a correctly-read label
+ * can sit from the true mapping through rounding alone.
+ */
+function inferQuantum(values: number[]): number {
+  const finite = values.filter((v) => Number.isFinite(v) && v !== 0);
+  if (finite.length === 0) return 0;
+  const scale = Math.max(...finite.map(Math.abs));
+  for (let k = 6; k >= -8; k--) {
+    const q = Math.pow(10, k);
+    if (q > scale) continue;
+    if (finite.every((v) => Math.abs(v / q - Math.round(v / q)) < 1e-6)) return q;
+  }
+  return 0;
 }
 
 /**

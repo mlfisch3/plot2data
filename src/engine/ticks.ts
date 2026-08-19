@@ -136,32 +136,114 @@ export function findLabelBand(
     horizontal ? Math.min(img.height * 0.3, 160) : Math.min(img.width * 0.35, 220),
   );
   const bg = frame.background;
+  const perpMax = horizontal ? img.height : img.width;
 
-  let near = -1;
-  let far = -1;
-  let emptyRun = 0;
+  // Contiguous stripes of ink outside the axis, nearest first.
+  const stripes: Array<{ from: number; to: number }> = [];
+  let current: { from: number; to: number } | null = null;
+  let empty = 0;
   for (let k = startOffset; k <= limit; k++) {
     const p = spinePos + k * step;
-    if (p < 0 || p >= (horizontal ? img.height : img.width)) break;
+    if (p < 0 || p >= perpMax) break;
     let count = 0;
+    let run = 0;
+    let longest = 0;
     for (let a = lo; a <= hi; a++) {
       const x = horizontal ? a : p;
       const y = horizontal ? p : a;
-      if (colourDistance(getPixel(img, x, y), bg) >= inkThreshold) count++;
+      if (colourDistance(getPixel(img, x, y), bg) >= inkThreshold) {
+        count++;
+        if (++run > longest) longest = run;
+      } else {
+        run = 0;
+      }
     }
-    // A row spanning most of the axis is a line (spine antialiasing, a border,
-    // a gridline), never a row of label text.
-    const lineLike = count >= (hi - lo + 1) * 0.5;
-    if (count > 0 && !lineLike) {
-      if (near < 0) near = p;
-      far = p;
-      emptyRun = 0;
-    } else if (near >= 0 && (lineLike || ++emptyRun >= 3)) {
+    // An *unbroken* run across most of the axis is a line: spine antialiasing,
+    // a border, a gridline. A dense row of tick labels can cover as much of the
+    // axis in total, but never without gaps, so total ink is the wrong test.
+    const lineLike = longest >= (hi - lo + 1) * 0.5;
+    if (lineLike) {
+      if (current) stripes.push(current);
       break;
     }
+    if (count > 0) {
+      if (!current) current = { from: p, to: p };
+      else current.to = p;
+      empty = 0;
+    } else if (current && ++empty >= 2) {
+      stripes.push(current);
+      current = null;
+    }
   }
-  if (near < 0) return null;
-  return step > 0 ? { near, far } : { near: far, far: near };
+  if (current) stripes.push(current);
+  if (stripes.length === 0) return null;
+
+  // Grow outward through the gaps, but only while the extra ink lines up with
+  // the same positions along the axis. A log axis writes `10` and its exponent
+  // with a wide gap between them, and clipping at the first gap would read the
+  // exponent alone - a silent decade error. An axis *title* sits in the same
+  // place but does not share the labels' positions, so it is left behind.
+  const reference = groupCentres(img, frame, side, stripes[0], inkThreshold);
+  let band = { ...stripes[0] };
+  for (let i = 1; i < stripes.length; i++) {
+    const centres = groupCentres(img, frame, side, stripes[i], inkThreshold);
+    if (!centresAlign(centres, reference)) break;
+    band = { from: band.from, to: stripes[i].to };
+  }
+  return step > 0 ? { near: band.from, far: band.to } : { near: band.to, far: band.from };
+}
+
+/** Centres of the ink groups along the axis inside one perpendicular stripe. */
+function groupCentres(
+  img: ImageBuffer,
+  frame: PlotFrame,
+  side: AxisSide,
+  stripe: { from: number; to: number },
+  inkThreshold: number,
+): number[] {
+  const { lo, hi, horizontal } = axisRange(img, frame, side, 6);
+  const bg = frame.background;
+  const p0 = Math.min(stripe.from, stripe.to);
+  const p1 = Math.max(stripe.from, stripe.to);
+  const centres: number[] = [];
+  let start = -1;
+  let gap = 0;
+  let last = -1;
+  const flush = () => {
+    if (start >= 0 && last >= start) centres.push((start + last) / 2);
+    start = -1;
+  };
+  for (let a = lo; a <= hi; a++) {
+    let inked = false;
+    for (let p = p0; p <= p1 && !inked; p++) {
+      const x = horizontal ? a : p;
+      const y = horizontal ? p : a;
+      if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
+      if (colourDistance(getPixel(img, x, y), bg) >= inkThreshold) inked = true;
+    }
+    if (inked) {
+      if (start < 0) start = a;
+      last = a;
+      gap = 0;
+    } else if (start >= 0 && ++gap > 3) {
+      flush();
+      gap = 0;
+    }
+  }
+  flush();
+  return centres;
+}
+
+/** True when most of `reference`'s positions have a partner in `centres`. */
+function centresAlign(centres: number[], reference: number[]): boolean {
+  if (centres.length === 0 || reference.length === 0) return false;
+  const spacings: number[] = [];
+  for (let i = 1; i < reference.length; i++) spacings.push(reference[i] - reference[i - 1]);
+  spacings.sort((a, b) => a - b);
+  const spacing = spacings.length ? spacings[spacings.length >> 1] : 12;
+  const tol = Math.max(3, spacing * 0.25);
+  const matched = reference.filter((r) => centres.some((c) => Math.abs(c - r) <= tol)).length;
+  return matched >= Math.max(1, Math.ceil(reference.length * 0.6));
 }
 
 function scanDirection(

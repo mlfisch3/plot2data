@@ -131,6 +131,16 @@ export function splitSuperscript(
   const baseBottom = Math.max(...baseGlyphs.map((g) => g.bottom));
   if (baseBottom < top + height * 0.8) return null;
 
+  // The exponent must be a digit, not a stray mark: a gridline dot or a comma
+  // caught at the edge of the crop also sits above the baseline, and treating
+  // one as an exponent turns `40` into an unreadable `4^0`.
+  const expTop = Math.min(...expGlyphs.map((g) => g.top));
+  const expBottom = Math.max(...expGlyphs.map((g) => g.bottom));
+  const expWidth = expGlyphs[expGlyphs.length - 1].x1 - expGlyphs[0].x0 + 1;
+  const baseWidth = baseGlyphs[baseGlyphs.length - 1].x1 - baseGlyphs[0].x0 + 1;
+  if (expBottom - expTop + 1 < height * 0.3) return null;
+  if (expWidth < baseWidth * 0.2 || expWidth < 2) return null;
+
   return {
     base: { x0: baseGlyphs[0].x0, x1: baseGlyphs[baseGlyphs.length - 1].x1, y0: rect.y0, y1: rect.y1 },
     exponent: {
@@ -236,7 +246,13 @@ export async function readTickLabels(
     }
     if (bestIndex < 0 || bestD > tolerance) continue;
     if (jobs.some((j) => j.index === bestIndex)) continue;
-    jobs.push({ index: bestIndex, rect: pad(blob.rect, 3, img) });
+    // Pad for breathing room, but never into the plot area: a gridline or the
+    // end of a data line inside the crop is noise the recogniser has to guess
+    // around.
+    const padded = pad(blob.rect, 3, img);
+    if (scan.side === 'left') padded.x1 = Math.min(padded.x1, frame.rect.x0 - 1);
+    else padded.y0 = Math.max(padded.y0, frame.rect.y1 + 1);
+    jobs.push({ index: bestIndex, rect: padded });
     if (jobs.length >= max) break;
   }
 
