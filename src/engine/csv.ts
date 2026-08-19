@@ -83,20 +83,37 @@ export function csvHeader(
   }
 
   for (const s of series) {
-    const parts = [`+/-${formatValue(s.uncertainty.x)} in x`, `+/-${formatValue(s.uncertainty.y)} in y`];
-    if (s.uncertainty.yRelative !== undefined) {
-      parts[1] = `x/ ${(1 + s.uncertainty.yRelative).toFixed(3)} in y (log axis)`;
-    }
-    if (s.uncertainty.xRelative !== undefined) {
-      parts[0] = `x/ ${(1 + s.uncertainty.xRelative).toFixed(3)} in x (log axis)`;
-    }
-    lines.push(`# ${s.name} uncertainty from line thickness: ${parts.join(', ')}`);
+    lines.push(`# ${s.name} uncertainty from line thickness: ${describeUncertainty(s)}`);
   }
 
   for (const w of analysis.warnings) {
     lines.push(`# ${w.level}: ${w.message}`);
   }
   return lines;
+}
+
+/**
+ * Human-readable uncertainty for one series.
+ *
+ * On a log axis an absolute error is meaningless - the same pixel is worth a
+ * hundred times more at the top of the axis than at the bottom - so the honest
+ * figure there is the multiplicative one.
+ */
+export function describeUncertainty(s: DataSeries): string {
+  const part = (absolute: number, relative: number | undefined, axis: string) =>
+    relative === undefined
+      ? `+/-${compact(absolute)} in ${axis}`
+      : `x or / ${(1 + relative).toFixed(3)} in ${axis} (log axis)`;
+  return `${part(s.uncertainty.x, s.uncertainty.xRelative, 'x')}, ${part(s.uncertainty.y, s.uncertainty.yRelative, 'y')}`;
+}
+
+/** Three significant figures; uncertainty never deserves more. */
+export function compact(v: number): string {
+  if (!Number.isFinite(v)) return 'n/a';
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1e5 || a < 1e-3) return v.toExponential(1);
+  return String(Number(v.toPrecision(3)));
 }
 
 /**

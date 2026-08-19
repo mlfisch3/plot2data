@@ -169,7 +169,14 @@ export function fitAxis(samples: FitSample[]): { fit: AxisFit; report: ScaleFitR
   if (!linear) return null;
 
   const positive = samples.every((s) => s.value > 0);
-  const log = positive ? robustLeastSquares(samples, (v) => Math.log10(v)) : null;
+  // A log axis needs decades to be a log axis. Over a narrow span far from zero
+  // - a year axis, say - log10 is very nearly a straight line, so both models
+  // fit and the tool would keep flagging an ambiguity that does not exist.
+  const values = samples.map((s) => s.value);
+  const decades = positive
+    ? Math.log10(Math.max(...values) / Math.min(...values))
+    : 0;
+  const log = positive && decades >= 0.5 ? robustLeastSquares(samples, (v) => Math.log10(v)) : null;
 
   if (samples.length < 3 || !log) {
     return {

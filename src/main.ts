@@ -10,7 +10,9 @@ import './styles.css';
 import {
   analyse,
   buildSeries,
+  compact,
   describeAxis,
+  describeUncertainty,
   formatValue,
   toCsv,
   type Analysis,
@@ -468,9 +470,7 @@ function renderPanel(): void {
       describeAxis(cal.y, 'y', analysis.units.y),
     ];
     for (const s of series) {
-      lines.push(
-        `${s.name}: ±${compact(s.uncertainty.x)} in x, ±${compact(s.uncertainty.y)} in y (line thickness)`,
-      );
+      lines.push(`${s.name}: ${describeUncertainty(s)} (from line thickness)`);
     }
     return lines.join('\n');
   }
@@ -567,15 +567,6 @@ function previewText(series: DataSeries[]): string {
 
 function round(v: number): string {
   return String(Math.round(v * 10) / 10);
-}
-
-/** Three significant figures: uncertainty never deserves more. */
-function compact(v: number): string {
-  if (!Number.isFinite(v)) return 'n/a';
-  if (v === 0) return '0';
-  const a = Math.abs(v);
-  if (a >= 1e5 || a < 1e-3) return v.toExponential(1);
-  return String(Number(v.toPrecision(3)));
 }
 
 function escapeHtml(text: string): string {
