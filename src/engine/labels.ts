@@ -7,7 +7,7 @@
  * interface - the browser supplies a tesseract.js-backed implementation.
  */
 
-import { colourDistance, cropImage, getPixel, scaleImage } from './image.ts';
+import { colourDistance, createImage, cropImage, getPixel, scaleImage } from './image.ts';
 import { findLabelBlobs, medianGap, resolveTickOptions, type TickScan } from './ticks.ts';
 import { parseLabel, parseOffsetAnnotation } from './parse-number.ts';
 import type {
@@ -44,11 +44,14 @@ function inkCount(img: ImageBuffer, rect: Rect, bg: { r: number; g: number; b: n
   return n;
 }
 
-/** Upscale factor that puts small chart labels in tesseract's comfort zone. */
+/**
+ * Upscale factor that puts small chart labels in the recogniser's comfort zone.
+ * Around 50 px of text height reads best; below ~30 px digits start to drop.
+ */
 function ocrScale(rect: Rect): number {
   const h = rect.y1 - rect.y0 + 1;
   if (h <= 0) return 4;
-  return Math.max(1, Math.min(6, Math.round(40 / h)));
+  return Math.max(2, Math.min(6, Math.round(50 / h)));
 }
 
 /** Per-column vertical ink extent inside a rectangle. */
@@ -139,15 +142,51 @@ export function splitSuperscript(
   };
 }
 
+/**
+ * Normalise a label crop to black text on white.
+ *
+ * Recognisers are tuned for dark text on light paper. Chart labels arrive light
+ * on dark, or blurred by JPEG, or tinted; mapping ink strength to darkness
+ * gives the recogniser what it expects and keeps the antialiasing ramp, which
+ * it reads better than a hard threshold.
+ */
+export function normaliseForOcr(img: ImageBuffer, bg: { r: number; g: number; b: number }): ImageBuffer {
+  let strongest = 0;
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      const d = colourDistance(getPixel(img, x, y), bg);
+      if (d > strongest) strongest = d;
+    }
+  }
+  const scale = Math.max(30, strongest * 0.75);
+  // A quiet white margin: recognisers segment a line of text much better when
+  // it is not flush against the edge of the image.
+  const margin = 6;
+  const out = createImage(img.width + margin * 2, img.height + margin * 2);
+  out.data.fill(255);
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      const d = colourDistance(getPixel(img, x, y), bg);
+      const v = Math.round(255 * (1 - Math.min(1, d / scale)));
+      const i = ((y + margin) * out.width + (x + margin)) * 4;
+      out.data[i] = v;
+      out.data[i + 1] = v;
+      out.data[i + 2] = v;
+      out.data[i + 3] = 255;
+    }
+  }
+  return out;
+}
+
 async function recogniseRect(
   img: ImageBuffer,
   rect: Rect,
   ocr: OcrProvider,
+  bg: { r: number; g: number; b: number },
 ): Promise<OcrResult | null> {
   try {
-    return await ocr.recognise(scaleImage(cropImage(img, rect), ocrScale(rect)), {
-      charset: NUMERIC_CHARSET,
-    });
+    const crop = normaliseForOcr(cropImage(img, rect), bg);
+    return await ocr.recognise(scaleImage(crop, ocrScale(rect)), { charset: NUMERIC_CHARSET });
   } catch {
     return null;
   }
@@ -197,7 +236,7 @@ export async function readTickLabels(
     }
     if (bestIndex < 0 || bestD > tolerance) continue;
     if (jobs.some((j) => j.index === bestIndex)) continue;
-    jobs.push({ index: bestIndex, rect: pad(blob.rect, 2, img) });
+    jobs.push({ index: bestIndex, rect: pad(blob.rect, 3, img) });
     if (jobs.length >= max) break;
   }
 
@@ -207,8 +246,8 @@ export async function readTickLabels(
     let confidence: number | undefined;
     if (sup) {
       const [base, exponent] = await Promise.all([
-        recogniseRect(img, pad(sup.base, 2, img), ocr),
-        recogniseRect(img, pad(sup.exponent, 3, img), ocr),
+        recogniseRect(img, pad(sup.base, 2, img), ocr, frame.background),
+        recogniseRect(img, pad(sup.exponent, 3, img), ocr, frame.background),
       ]);
       const b = base?.text.trim() ?? '';
       const e = exponent?.text.trim() ?? '';
@@ -216,7 +255,7 @@ export async function readTickLabels(
       text = `${b}^${e}`;
       confidence = Math.min(base?.confidence ?? 1, exponent?.confidence ?? 1);
     } else {
-      const r = await recogniseRect(img, job.rect, ocr);
+      const r = await recogniseRect(img, job.rect, ocr, frame.background);
       if (!r) continue;
       text = r.text.trim();
       confidence = r.confidence;
@@ -284,14 +323,8 @@ export async function readOffsetAnnotations(
   for (const { side, rect } of annotationRects(img, frame)) {
     if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) continue;
     if (inkCount(img, rect, frame.background) < 8) continue;
-    let result: OcrResult;
-    try {
-      result = await ocr.recognise(scaleImage(cropImage(img, rect), ocrScale(rect)), {
-        charset: NUMERIC_CHARSET,
-      });
-    } catch {
-      continue;
-    }
+    const result = await recogniseRect(img, rect, ocr, frame.background);
+    if (!result) continue;
     const text = result.text.trim();
     if (!text) continue;
     const parsed = parseOffsetAnnotation(text);

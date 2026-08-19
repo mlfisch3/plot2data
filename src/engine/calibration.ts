@@ -89,41 +89,50 @@ function leastSquares(samples: FitSample[], transform: (v: number) => number): A
 /**
  * Least squares with misread-label rejection.
  *
- * OCR gets a label wrong now and then - `0.1` read as `1` is a whole decade -
- * and one bad label drags a plain least-squares fit off for every point. A
- * label whose residual dwarfs the rest is not evidence about the axis, it is a
- * misread, so drop it and refit. What was dropped is reported, never hidden.
+ * OCR gets a label wrong now and then - `0.1` read as `1` is a whole decade,
+ * `12` read as `17` shifts the whole axis - and one bad label drags a plain
+ * least-squares fit off for every point. Residual-trimming does not find these:
+ * a single large outlier inflates the residuals of the good points too. So we
+ * look for the largest set of labels that agree on one straight mapping, and
+ * only adopt it when it is dramatically better than fitting everything, which
+ * keeps merely *rounded* labels (`0, 4k, 9k, 13k, 18k, 22k`) in the fit where
+ * they belong. Whatever is dropped is reported, never hidden.
  */
 function robustLeastSquares(
   samples: FitSample[],
   transform: (v: number) => number,
 ): AxisFit | null {
-  let working = [...samples];
-  const dropped: FitSample[] = [];
-  let fit = leastSquares(working, transform);
-  if (!fit) return null;
+  const full = leastSquares(samples, transform);
+  if (!full) return null;
+  if (samples.length < 4 || full.relativeResidual <= 0.01) return full;
 
-  for (let pass = 0; pass < 3 && working.length > 3; pass++) {
-    const residuals = working.map((s) =>
-      Math.abs(transform(s.value) - (fit!.slope * s.px + fit!.intercept)),
-    );
-    const sorted = [...residuals].sort((a, b) => a - b);
-    const med = sorted[Math.floor(sorted.length / 2)];
-    let worstIdx = 0;
-    for (let i = 1; i < residuals.length; i++) if (residuals[i] > residuals[worstIdx]) worstIdx = i;
-    const worst = residuals[worstIdx];
-    // Needs to be both far outside the pack and materially large in absolute
-    // terms, so that a clean fit with tiny rounding noise is left alone.
-    const spanPx = Math.max(...working.map((s) => s.px)) - Math.min(...working.map((s) => s.px));
-    const spanValue = Math.abs(fit.slope * spanPx);
-    if (!(worst > Math.max(med * 6, spanValue * 0.015))) break;
-    dropped.push(working[worstIdx]);
-    working = working.filter((_, i) => i !== worstIdx);
-    const refit = leastSquares(working, transform);
-    if (!refit) break;
-    fit = refit;
+  const pts = samples
+    .map((s) => ({ s, y: transform(s.value) }))
+    .filter((p) => Number.isFinite(p.y));
+  if (pts.length < 4) return full;
+  const range = Math.max(...pts.map((p) => p.y)) - Math.min(...pts.map((p) => p.y));
+  if (!(range > 0)) return full;
+  const tol = range * 0.02;
+
+  let best: FitSample[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const dx = pts[j].s.px - pts[i].s.px;
+      if (Math.abs(dx) < 1e-9) continue;
+      const slope = (pts[j].y - pts[i].y) / dx;
+      const intercept = pts[i].y - slope * pts[i].s.px;
+      const inliers = pts
+        .filter((p) => Math.abs(p.y - (slope * p.s.px + intercept)) <= tol)
+        .map((p) => p.s);
+      if (inliers.length > best.length) best = inliers;
+    }
   }
-  return { ...fit, dropped };
+
+  if (best.length < Math.max(3, pts.length * 0.5)) return full;
+  const trimmed = leastSquares(best, transform);
+  if (!trimmed || trimmed.relativeResidual >= full.relativeResidual * 0.4) return full;
+  const kept = new Set(best);
+  return { ...trimmed, dropped: samples.filter((s) => !kept.has(s)) };
 }
 
 /**
