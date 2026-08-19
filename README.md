@@ -33,14 +33,22 @@ Node 24 and npm 11.
 
 ```sh
 npm install
-npm run dev      # http://localhost:5173
-npm run build    # static bundle in dist/
-npm test         # engine unit tests and the measured-accuracy suite
+npm run dev         # http://localhost:5173
+npm run build       # static bundle in dist/
+npm test            # engine unit tests and the measured-accuracy suite
+npm run android:apk # debug APK in android/app/build/outputs/apk/debug/
 ```
 
 `dist/index.html` is a single self-contained page: the script and stylesheet are inlined into it, so it runs from any static host
 *and* by opening it straight from the filesystem. Over `file://` the browser refuses to start a web worker, so OCR is skipped and the
 tool says so; you type the four anchor values in and everything else - detection, tracing, export - works exactly the same.
+
+## On a phone
+
+`android/` is a minimal Kotlin app that hosts the same bundle in a WebView, so a plot cropped with the S Pen's Smart Select can be
+shared straight to it and come back as a CSV. It serves the page over an asset-loader https origin rather than `file://`, which means
+the module build loads and OCR does run there. [ANDROID.md](ANDROID.md) covers building, sideloading, the Smart Select route, and what
+is still unverified until it runs on real hardware.
 
 Other scripts:
 
@@ -136,5 +144,7 @@ tools/          corpus generator, accuracy report, diagnostics
 test/           unit tests and the measured-accuracy suite
 corpus/         synthetic plots, ground-truth CSVs and case metadata
 examples/real/  the four real screenshots used as the acceptance corpus
-public/         tessdata; the tesseract worker and core are copied in by `npm run assets`
+android/        the Kotlin WebView shell; see ANDROID.md
+vendor/         the tesseract language data, the one tracked binary
+public/         generated in full by `npm run assets` from vendor/ and node_modules
 ```
