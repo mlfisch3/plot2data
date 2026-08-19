@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: axes and a traced series, drawn inside the
+     72x72dp safe zone of the 108x108dp canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Axis spines. -->
+    <path
+        android:fillColor="#8CA3BF"
+        android:pathData="M32,26 h5 v52 h41 v5 h-46 z" />
+
+    <!-- Tick marks on both spines. -->
+    <path
+        android:fillColor="#8CA3BF"
+        android:pathData="M26,70 h6 v3 h-6 z M26,56 h6 v3 h-6 z M26,42 h6 v3 h-6 z
+                          M46,78 v6 h3 v-6 z M60,78 v6 h3 v-6 z M74,78 v6 h3 v-6 z" />
+
+    <!-- The traced curve. -->
+    <path
+        android:strokeColor="#4DABF7"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"
+        android:pathData="M42,68 L54,52 L66,58 L78,34" />
+
+    <!-- Extracted points sitting on it. -->
+    <path
+        android:fillColor="#FF922B"
+        android:pathData="M42,68 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 z
+                          M54,52 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 z
+                          M66,58 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 z
+                          M78,34 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 z" />
+</vector>

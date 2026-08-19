@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/launcher_background"
+        android:pathData="M0,0 h108 v108 h-108 z" />
+    <!-- A faint grid, so the icon reads as a plot even at launcher size. -->
+    <path
+        android:fillColor="#1E2836"
+        android:pathData="M0,26 h108 v1 h-108 z M0,52 h108 v1 h-108 z M0,78 h108 v1 h-108 z
+                          M26,0 v108 h1 v-108 z M52,0 v108 h1 v-108 z M78,0 v108 h1 v-108 z" />
+</vector>

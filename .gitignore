@@ -1,8 +1,13 @@
 node_modules/
 dist/
+dist-android/
 .DS_Store
 *.log
-android/app/build/
-android/build/
 android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+# The web bundle is copied in at build time by `npm run build:android`; it is
+# never committed twice.
+android/app/src/main/assets/
 public/tesseract/

@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "npm run assets && vite",
     "build": "npm run assets && tsc --noEmit && vite build && node --experimental-strip-types tools/inline-bundle.ts",
+    "build:android": "npm run assets && tsc --noEmit && P2D_ANDROID=1 vite build && node --experimental-strip-types tools/sync-android-assets.ts",
+    "android:apk": "npm run build:android && node --experimental-strip-types tools/android-apk.ts",
+    "android:check": "node --experimental-strip-types tools/android-apk.ts testDebugUnitTest lintDebug",
     "preview": "vite preview",
     "assets": "node --experimental-strip-types tools/copy-tesseract.ts",
     "test": "vitest run",

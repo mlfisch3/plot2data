@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Plot2Data" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background_night</item>
+        <item name="android:isLightTheme" tools:targetApi="29">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+    </style>
+</resources>

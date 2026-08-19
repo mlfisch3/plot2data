@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Plot2Data" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <!-- Read by WebView's algorithmic-darkening support to decide whether the
+             page should be told it is in a dark context. Ignored before API 29. -->
+        <item name="android:isLightTheme" tools:targetApi="29">true</item>
+        <!-- Draw into the punch-hole area; the page keeps its controls clear of
+             it from the insets we hand it. Ignored before API 27. -->
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+    </style>
+</resources>
