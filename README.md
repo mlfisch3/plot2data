@@ -38,9 +38,9 @@ npm run build    # static bundle in dist/
 npm test         # engine unit tests and the measured-accuracy suite
 ```
 
-`dist/` is a self-contained static bundle with relative asset URLs, so it runs from any static host.
-Opening `dist/index.html` directly over `file://` works too, except that Chrome refuses to start a web worker from a `file://` page,
-so OCR is unavailable there and tick values must be typed in - everything else, including extraction and export, still works.
+`dist/index.html` is a single self-contained page: the script and stylesheet are inlined into it, so it runs from any static host
+*and* by opening it straight from the filesystem. Over `file://` the browser refuses to start a web worker, so OCR is skipped and the
+tool says so; you type the four anchor values in and everything else - detection, tracing, export - works exactly the same.
 
 Other scripts:
 

@@ -26,6 +26,14 @@ function toCanvas(image: ImageBuffer): HTMLCanvasElement {
   return canvas;
 }
 
+/** Reject rather than hang: a worker that never loads must not block the UI. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('OCR worker timed out')), ms)),
+  ]);
+}
+
 export class BrowserOcr implements OcrProvider {
   private worker: Worker | null = null;
   private starting: Promise<void> | null = null;
@@ -34,16 +42,24 @@ export class BrowserOcr implements OcrProvider {
 
   async start(): Promise<void> {
     if (this.worker || this.failed) return;
+    // Chrome refuses to start a worker from a `file://` page, and the failure
+    // surfaces inside the worker rather than as a rejected promise, so waiting
+    // on it would hang the extraction. Skip it outright and let the user type
+    // the anchor values in - the tool works fully without OCR.
+    if (window.location.protocol === 'file:') {
+      this.failed = true;
+      return;
+    }
     this.starting ??= (async () => {
       try {
-        const worker = await createWorker('eng', 1, {
+        const worker = await withTimeout(createWorker('eng', 1, {
           workerPath: assetUrl('./tesseract/worker.min.js'),
           corePath: assetUrl('./tesseract/'),
           langPath: assetUrl('./tessdata'),
           gzip: true,
           cacheMethod: 'none',
           logger: () => {},
-        });
+        }), 30_000);
         await worker.setParameters({
           tessedit_char_whitelist: CHARSET,
           // A tick label is a single line of text, never a paragraph.

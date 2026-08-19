@@ -198,7 +198,11 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
   // Nothing readable on either axis usually means the crop holds more than one
   // plot, or no plot at all. Say that, rather than exporting against a
   // placeholder 0-1 mapping the user might not notice.
-  if (!xTicks.some((t) => t.value !== undefined) && !yTicks.some((t) => t.value !== undefined)) {
+  if (
+    ocr &&
+    !xTicks.some((t) => t.value !== undefined) &&
+    !yTicks.some((t) => t.value !== undefined)
+  ) {
     warnings.unshift({
       code: 'frame-uncertain',
       level: 'warn',
