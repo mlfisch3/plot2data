@@ -7,6 +7,7 @@ import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.view.RoundedCorner
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -60,20 +61,34 @@ class MainActivity : ComponentActivity() {
     private var currentToken: String? = null
 
     private var insets = PageInsets()
-    private var pendingCsv: String? = null
 
-    private val saveCsvLauncher =
-        registerForActivityResult(ActivityResultContracts.CreateDocument(CSV_MIME)) { uri ->
-            val text = pendingCsv
-            pendingCsv = null
-            if (uri == null || text == null) return@registerForActivityResult
-            io.execute {
-                val ok = writeCsv(uri, text)
-                runOnUiThread {
-                    toast(if (ok) R.string.csv_saved else R.string.csv_save_failed)
-                }
+    /** Bytes waiting for the file picker the page just opened. */
+    private var pendingBytes: ByteArray? = null
+
+    private val saveCsvLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument(CSV_MIME), ::writePending)
+
+    /**
+     * A second launcher, not a second use of the first.
+     *
+     * `CreateDocument` fixes its MIME type when it is registered, and a
+     * workbook offered as `text/csv` gets saved with the wrong type and opens in
+     * the wrong app. Registrations must also happen before the activity starts,
+     * so this cannot be built on demand.
+     */
+    private val saveXlsxLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument(XLSX_MIME), ::writePending)
+
+    /** Write whatever the page handed over into the document the user picked. */
+    private fun writePending(uri: Uri?) {
+        val bytes = pendingBytes
+        pendingBytes = null
+        if (uri == null || bytes == null) return
+        io.execute {
+            val ok = writeBytes(uri, bytes)
+            runOnUiThread {
+                toast(if (ok) R.string.csv_saved else R.string.csv_save_failed)
             }
         }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -324,9 +339,9 @@ class MainActivity : ComponentActivity() {
 
     /* --------------------------------------------------------------- export */
 
-    private fun writeCsv(uri: Uri, text: String): Boolean = try {
+    private fun writeBytes(uri: Uri, bytes: ByteArray): Boolean = try {
         contentResolver.openOutputStream(uri, "wt").use { output ->
-            if (output == null) false else { output.write(text.toByteArray()); true }
+            if (output == null) false else { output.write(bytes); true }
         }
     } catch (e: IOException) {
         false
@@ -334,14 +349,14 @@ class MainActivity : ComponentActivity() {
         false
     }
 
-    private fun shareCsvFile(name: String, text: String) {
+    private fun shareFile(name: String, bytes: ByteArray, mime: String) {
         val dir = File(cacheDir, "csv")
         io.execute {
             val uri = try {
                 dir.listFiles()?.forEach { it.delete() }
                 if (!dir.exists() && !dir.mkdirs()) return@execute
                 val file = File(dir, name)
-                file.writeText(text)
+                file.writeBytes(bytes)
                 FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             } catch (e: IOException) {
                 null
@@ -354,7 +369,7 @@ class MainActivity : ComponentActivity() {
                     return@runOnUiThread
                 }
                 val send = Intent(Intent.ACTION_SEND).apply {
-                    type = CSV_MIME
+                    type = mime
                     putExtra(Intent.EXTRA_STREAM, uri)
                     putExtra(Intent.EXTRA_TITLE, name)
                     putExtra(Intent.EXTRA_SUBJECT, name)
@@ -390,19 +405,54 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun saveCsv(name: String?, text: String?) = onPage {
             if (text.isNullOrEmpty()) return@onPage
-            pendingCsv = text
-            try {
-                saveCsvLauncher.launch(Exports.safeFileName(name))
-            } catch (e: ActivityNotFoundException) {
-                pendingCsv = null
-                toast(R.string.csv_save_failed)
-            }
+            save(Exports.safeFileName(name), text.toByteArray(), CSV_MIME)
         }
 
         @JavascriptInterface
         fun shareCsv(name: String?, text: String?) = onPage {
             if (text.isNullOrEmpty()) return@onPage
-            shareCsvFile(Exports.safeFileName(name), text)
+            shareFile(Exports.safeFileName(name), text.toByteArray(), CSV_MIME)
+        }
+
+        /**
+         * The binary export route, for the Excel workbook.
+         *
+         * A workbook is a zip and cannot survive the trip through a JavaScript
+         * string, so it arrives base64 encoded. Only the formats this app knows
+         * how to file are accepted: the page decides *what* to export, but not
+         * what type the phone believes it is.
+         */
+        @JavascriptInterface
+        fun saveBinary(name: String?, base64: String?, mime: String?) = onPage {
+            val bytes = decode(base64) ?: return@onPage
+            save(Exports.safeFileName(name, extensionFor(mime)), bytes, mimeFor(mime))
+        }
+
+        @JavascriptInterface
+        fun shareBinary(name: String?, base64: String?, mime: String?) = onPage {
+            val bytes = decode(base64) ?: return@onPage
+            shareFile(Exports.safeFileName(name, extensionFor(mime)), bytes, mimeFor(mime))
+        }
+
+        private fun decode(base64: String?): ByteArray? {
+            if (base64.isNullOrEmpty()) return null
+            return try {
+                Base64.decode(base64, Base64.DEFAULT)
+            } catch (e: IllegalArgumentException) {
+                toast(R.string.csv_save_failed)
+                null
+            }
+        }
+
+        private fun save(name: String, bytes: ByteArray, mime: String) {
+            pendingBytes = bytes
+            val launcher = if (mime == XLSX_MIME) saveXlsxLauncher else saveCsvLauncher
+            try {
+                launcher.launch(name)
+            } catch (e: ActivityNotFoundException) {
+                pendingBytes = null
+                toast(R.string.csv_save_failed)
+            }
         }
 
         private inline fun onPage(crossinline body: () -> Unit) {
@@ -437,6 +487,14 @@ class MainActivity : ComponentActivity() {
         const val SHARED_PREFIX = "/shared/"
         const val BRIDGE_NAME = "Plot2DataAndroid"
         const val CSV_MIME = "text/csv"
+        const val XLSX_MIME =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        /** Anything the page asks for that is not a known workbook is a CSV. */
+        fun mimeFor(mime: String?): String = if (mime == XLSX_MIME) XLSX_MIME else CSV_MIME
+
+        fun extensionFor(mime: String?): String =
+            if (mime == XLSX_MIME) Exports.XLSX_EXTENSION else Exports.CSV_EXTENSION
         const val KEY_TOKEN = "plot2data.image.token"
 
         fun blocked(): WebResourceResponse = WebResourceResponse(

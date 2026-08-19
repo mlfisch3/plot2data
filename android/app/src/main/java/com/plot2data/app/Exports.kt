@@ -11,6 +11,10 @@ object Exports {
 
     const val FALLBACK_NAME: String = "plot-data.csv"
 
+    /** Extensions the page is allowed to ask for, and the type each is saved as. */
+    const val CSV_EXTENSION: String = "csv"
+    const val XLSX_EXTENSION: String = "xlsx"
+
     private const val MAX_NAME = 120
     private val ILLEGAL = Regex("""[\\/:*?"<>|\x00-\x1f]""")
     private val WHITESPACE = Regex("""\s+""")
@@ -22,7 +26,9 @@ object Exports {
      * The page derives the name from the loaded image, so it can contain
      * anything a share target ever put in a filename.
      */
-    fun safeFileName(raw: String?): String {
+    fun safeFileName(raw: String?, extension: String = CSV_EXTENSION): String {
+        val suffix = ".$extension"
+        val fallback = if (extension == CSV_EXTENSION) FALLBACK_NAME else "plot-data$suffix"
         val stripped = (raw ?: "")
             .substringAfterLast('/')
             .substringAfterLast('\\')
@@ -30,12 +36,12 @@ object Exports {
             .replace(WHITESPACE, " ")
             .trim()
             .trim('.')
-        if (stripped.isEmpty()) return FALLBACK_NAME
+        if (stripped.isEmpty()) return fallback
 
-        val withSuffix = if (stripped.endsWith(".csv", ignoreCase = true)) stripped else "$stripped.csv"
+        val withSuffix = if (stripped.endsWith(suffix, ignoreCase = true)) stripped else "$stripped$suffix"
         if (withSuffix.length <= MAX_NAME) return withSuffix
-        val head = withSuffix.take(MAX_NAME - 4).trim().trim('.')
-        return if (head.isEmpty()) FALLBACK_NAME else "$head.csv"
+        val head = withSuffix.take(MAX_NAME - suffix.length).trim().trim('.')
+        return if (head.isEmpty()) fallback else "$head$suffix"
     }
 
     /** A token is only ever used as a cache filename, so it must not be a path. */

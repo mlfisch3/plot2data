@@ -58,4 +58,21 @@ class ExportsTest {
         assertFalse(Exports.isValidToken("a.bin"))
         assertFalse(Exports.isValidToken("x".repeat(65)))
     }
+
+    @Test
+    fun `keeps a workbook a workbook`() {
+        assertEquals("chart-data.xlsx", Exports.safeFileName("chart-data", Exports.XLSX_EXTENSION))
+        assertEquals("chart-data.xlsx", Exports.safeFileName("chart-data.xlsx", Exports.XLSX_EXTENSION))
+        // A name the page derived from a CSV export keeps both parts rather than
+        // pretending a `.csv` in the middle is the extension.
+        assertEquals("chart.csv.xlsx", Exports.safeFileName("chart.csv", Exports.XLSX_EXTENSION))
+        assertEquals("plot-data.xlsx", Exports.safeFileName("", Exports.XLSX_EXTENSION))
+    }
+
+    @Test
+    fun `truncates to the cap with the longer extension too`() {
+        val name = Exports.safeFileName("x".repeat(400), Exports.XLSX_EXTENSION)
+        assertTrue(name.length <= 120)
+        assertTrue(name.endsWith(".xlsx"))
+    }
 }
