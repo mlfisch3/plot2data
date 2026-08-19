@@ -465,9 +465,10 @@ function renderPanel(): void {
   }
 
   function mappingText(): string {
+    const rect = analysis.frame.rect;
     const lines = [
-      describeAxis(cal.x, 'x', analysis.units.x),
-      describeAxis(cal.y, 'y', analysis.units.y),
+      describeAxis(cal.x, 'x', analysis.units.x, [rect.x0, rect.x1]),
+      describeAxis(cal.y, 'y', analysis.units.y, [rect.y1, rect.y0]),
     ];
     for (const s of series) {
       lines.push(`${s.name}: ${describeUncertainty(s)} (from line thickness)`);

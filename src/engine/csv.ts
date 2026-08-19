@@ -41,6 +41,8 @@ export function csvHeader(
   const cal = options.calibration ?? analysis.calibration;
   const lines: string[] = [];
   lines.push(`# plot2data v${TOOL_VERSION} - values read from a plot image`);
+  // The ranges below span the plot area, not the anchors, so they say what the
+  // chart covers rather than restating the anchor values.
   if (options.source) lines.push(`# source: ${options.source}`);
 
   const modes = new Set(series.map((s) => s.mode));
@@ -53,8 +55,9 @@ export function csvHeader(
     );
   }
 
-  lines.push(`# ${describeAxis(cal.x, 'x', analysis.units.x)}`);
-  lines.push(`# ${describeAxis(cal.y, 'y', analysis.units.y)}`);
+  const rect = analysis.frame.rect;
+  lines.push(`# ${describeAxis(cal.x, 'x', analysis.units.x, [rect.x0, rect.x1])}`);
+  lines.push(`# ${describeAxis(cal.y, 'y', analysis.units.y, [rect.y1, rect.y0])}`);
   lines.push(
     `# x anchors: pixel ${cal.x.a.px.toFixed(1)} = ${formatValue(cal.x.a.value)}, pixel ${cal.x.b.px.toFixed(1)} = ${formatValue(cal.x.b.value)} (${cal.x.a.source})`,
   );

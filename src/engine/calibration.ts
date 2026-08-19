@@ -354,10 +354,22 @@ export function isValid(cal: AxisCalibration): boolean {
   return true;
 }
 
-/** Human-readable one-line summary of the mapping, shown live in the UI. */
-export function describeAxis(cal: AxisCalibration, name: string, unit?: string): string {
-  const lo = pixelToValue(cal, cal.a.px);
-  const hi = pixelToValue(cal, cal.b.px);
+/**
+ * Human-readable one-line summary of the mapping, shown live in the UI.
+ *
+ * `spanPx` should be the plot area's own edges. Describing the range at the
+ * anchors instead would be useless: the value at an anchor is the anchor's
+ * value by definition, so the statement would not move when the user drags one.
+ */
+export function describeAxis(
+  cal: AxisCalibration,
+  name: string,
+  unit?: string,
+  spanPx?: [number, number],
+): string {
+  const [pxLo, pxHi] = spanPx ?? [cal.a.px, cal.b.px];
+  const lo = pixelToValue(cal, pxLo);
+  const hi = pixelToValue(cal, pxHi);
   const u = unit ? ` ${unit}` : '';
   return `${name}: ${formatValue(lo)}${u} to ${formatValue(hi)}${u}, ${cal.scale}`;
 }
