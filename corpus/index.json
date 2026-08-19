@@ -1,0 +1,77 @@
+[
+  {
+    "id": "linear-single-solid",
+    "image": "linear-single-solid.png",
+    "description": "Linear axes, one solid line, gridlines, light theme"
+  },
+  {
+    "id": "linear-single-nogrid",
+    "image": "linear-single-nogrid.png",
+    "description": "Linear axes, one solid line, no gridlines"
+  },
+  {
+    "id": "linear-thin-line",
+    "image": "linear-thin-line.png",
+    "description": "Linear axes, 1px line, gridlines - tests thin-ink tracing"
+  },
+  {
+    "id": "linear-thick-line",
+    "image": "linear-thick-line.png",
+    "description": "Linear axes, 5px line - tests centroid vs thickness"
+  },
+  {
+    "id": "linear-dashed",
+    "image": "linear-dashed.png",
+    "description": "Linear axes, dashed line - tests gap bridging"
+  },
+  {
+    "id": "linear-multi",
+    "image": "linear-multi.png",
+    "description": "Linear axes, three series, gridlines - tests colour separation"
+  },
+  {
+    "id": "dark-theme",
+    "image": "dark-theme.png",
+    "description": "Dark theme, two series, gridlines"
+  },
+  {
+    "id": "log-y",
+    "image": "log-y.png",
+    "description": "Logarithmic y axis, one series, gridlines"
+  },
+  {
+    "id": "log-y-multi",
+    "image": "log-y-multi.png",
+    "description": "Logarithmic y axis, two series"
+  },
+  {
+    "id": "scatter-markers",
+    "image": "scatter-markers.png",
+    "description": "Scatter plot with discrete circular markers - marker mode"
+  },
+  {
+    "id": "jpeg-compressed",
+    "image": "jpeg-compressed.jpg",
+    "description": "JPEG at quality 80 - tests robustness to compression artefacts"
+  },
+  {
+    "id": "offset-annotation",
+    "image": "offset-annotation.png",
+    "description": "Linear y axis labelled 0..8 with a 1e6 corner multiplier"
+  },
+  {
+    "id": "retina-2x",
+    "image": "retina-2x.png",
+    "description": "Rendered at deviceScaleFactor 2, as a retina screenshot would be"
+  },
+  {
+    "id": "log-log",
+    "image": "log-log.png",
+    "description": "Log x and log y axes, power law"
+  },
+  {
+    "id": "narrow-small",
+    "image": "narrow-small.png",
+    "description": "Small 480x320 plot - tests behaviour at low pixel budget"
+  }
+]

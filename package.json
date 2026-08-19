@@ -1,0 +1,29 @@
+{
+  "name": "plot2data",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Client-side extraction of numerical data from images of plots",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "corpus": "node --experimental-strip-types tools/generate-corpus.ts",
+    "accuracy": "vitest run test/accuracy.test.ts --reporter=verbose"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "chart.js": "^4.5.1",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^24.43.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "retina-2x",
+  "description": "Rendered at deviceScaleFactor 2, as a retina screenshot would be",
+  "width": 700,
+  "height": 440,
+  "deviceScaleFactor": 2,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 400,
+  "series": [
+    {
+      "label": "damped",
+      "colour": "#0072B2",
+      "fn": "damped",
+      "width": 2
+    }
+  ],
+  "image": "retina-2x.png",
+  "truth": "retina-2x.csv"
+}

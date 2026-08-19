@@ -1,0 +1,25 @@
+{
+  "id": "linear-dashed",
+  "description": "Linear axes, dashed line - tests gap bridging",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 400,
+  "series": [
+    {
+      "label": "sigmoid",
+      "colour": "#0072B2",
+      "fn": "sigmoid",
+      "width": 2,
+      "dashed": true
+    }
+  ],
+  "image": "linear-dashed.png",
+  "truth": "linear-dashed.csv"
+}

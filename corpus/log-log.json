@@ -1,0 +1,24 @@
+{
+  "id": "log-log",
+  "description": "Log x and log y axes, power law",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "logarithmic",
+  "yScale": "logarithmic",
+  "xMin": 0.1,
+  "xMax": 100,
+  "yMin": 0.001,
+  "yMax": 1000,
+  "samples": 400,
+  "series": [
+    {
+      "label": "power",
+      "colour": "#CC79A7",
+      "fn": "power",
+      "width": 2
+    }
+  ],
+  "image": "log-log.png",
+  "truth": "log-log.csv"
+}

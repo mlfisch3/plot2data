@@ -1,0 +1,24 @@
+{
+  "id": "linear-single-nogrid",
+  "description": "Linear axes, one solid line, no gridlines",
+  "width": 900,
+  "height": 560,
+  "grid": false,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 400,
+  "series": [
+    {
+      "label": "sigmoid",
+      "colour": "#D55E00",
+      "fn": "sigmoid",
+      "width": 2
+    }
+  ],
+  "image": "linear-single-nogrid.png",
+  "truth": "linear-single-nogrid.csv"
+}

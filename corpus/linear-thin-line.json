@@ -1,0 +1,24 @@
+{
+  "id": "linear-thin-line",
+  "description": "Linear axes, 1px line, gridlines - tests thin-ink tracing",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 400,
+  "series": [
+    {
+      "label": "parabola",
+      "colour": "#009E73",
+      "fn": "parabola",
+      "width": 1
+    }
+  ],
+  "image": "linear-thin-line.png",
+  "truth": "linear-thin-line.csv"
+}
