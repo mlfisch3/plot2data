@@ -57,6 +57,9 @@ room for doubt: half a stroke below a round cap the ink is already most of a str
 a miter it is a sliver. A sliver, and only a sliver, sends the tracer on down until the ink is a full stroke across,
 which is where the two legs of the join meet - the vertex.
 
+The correction costs one case a little: `narrow-small`, the 480x320 plot, went from 0.062% to 0.077% RMS - about a twelfth of a
+pixel, on the smallest image in the corpus, and six times inside its budget. Every other case is unchanged or better.
+
 ## The captain's real screenshots
 
 These have no exact ground truth, so each is judged against what the chart itself prints: the axis range implied by its tick labels,
