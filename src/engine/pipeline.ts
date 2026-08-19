@@ -195,6 +195,18 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
 
   // The gridline scan walks the whole interior, so do it once and share it.
   const grid = detectGridlines(img, frame, clampInterior(frame.rect, img, frame));
+  // Nothing readable on either axis usually means the crop holds more than one
+  // plot, or no plot at all. Say that, rather than exporting against a
+  // placeholder 0-1 mapping the user might not notice.
+  if (!xTicks.some((t) => t.value !== undefined) && !yTicks.some((t) => t.value !== undefined)) {
+    warnings.unshift({
+      code: 'frame-uncertain',
+      level: 'warn',
+      message:
+        'No tick labels were read on either axis. Crop to a single plot area, then set the four anchors by hand if they are still empty.',
+    });
+  }
+
   const candidates = findSeriesCandidates(img, frame, options.segment, grid).slice(
     0,
     options.maxSeries ?? 6,

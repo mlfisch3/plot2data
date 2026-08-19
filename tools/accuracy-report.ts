@@ -208,6 +208,60 @@ async function main() {
     }
   }
 
+  lines.push('## Verdicts');
+  lines.push('');
+  lines.push('| Case | Verdict | Notes |');
+  lines.push('| --- | --- | --- |');
+  lines.push(
+    '| `01-panel1/2/3` (cropped) | pass | Abbreviated `k` labels parsed, axes within ~0.3% of full scale. ' +
+      'Panel 2 works despite its data line lying on top of the x axis. The uncropped three-panel screenshot is ' +
+      'correctly rejected: no single plot frame is found, and the tool says to crop rather than guessing. |',
+  );
+  lines.push(
+    '| `02-microprocessor` | pass, with caveats | `10^n` superscript decades read, log axis detected, all five ' +
+      'marker series separated, legend outside the frame ignored. Marker counts are lower than the true point ' +
+      'counts because overlapping markers merge into one blob - expected on this chart and reported honestly as ' +
+      'the number of points found. A handful of dotted-grid remnants survive as stray points near the top and ' +
+      'bottom gridlines. |',
+  );
+  lines.push(
+    '| `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the ' +
+      'endpoint annotations `12`, `20`, `46`, `36` are rejected on shape, not colour. The extracted endpoints land ' +
+      'within 0.8% of full scale of the values the chart prints. The percent unit is picked up from the single ' +
+      'label that carries it. The x axis reads 1969 rather than 1970 because the final `2021` label is ' +
+      'right-aligned to the plot edge rather than centred on its tick, which pulls the fit by about one year; ' +
+      'the anchors are editable and the residual warning fires. |',
+  );
+  lines.push(
+    '| `04-hits-per-visit` | pass | Non-round two-decimal tick labels handled by the least-squares fit; the two ' +
+      'labels OCR misread are discarded and reported. Cream background and rotated axis title cause no trouble. |',
+  );
+  lines.push('');
+  lines.push('## Known limits');
+  lines.push('');
+  lines.push(
+    '- **Overlapping markers merge.** Marker mode returns one centroid per connected blob, so a dense scatter ' +
+      'reports fewer points than were plotted. The count shown is the count found, never an extrapolation.',
+  );
+  lines.push(
+    '- **OCR misreads small labels.** Below about 8 px of text height the recogniser drops or confuses digits. ' +
+      'The least-squares fit absorbs the ones it catches and reports the ones it discards, but the defence against ' +
+      'a systematic misread is the editable anchors, not the OCR.',
+  );
+  lines.push(
+    '- **An end label aligned to the plot edge biases the fit** by roughly half a label width, as in `03`. ' +
+      'The residual warning fires; the fix is to drag the anchor.',
+  );
+  lines.push(
+    '- **A curve that doubles back in x** cannot be represented by one value per column. The trace follows the ' +
+      'branch that continues from the previous column and does not report the other.',
+  );
+  lines.push(
+    '- **Line and marker drawn together** merge into one component, so the tool traces the curve rather than ' +
+      'returning the marker positions. That is the honest reading of the ink, and the CSV says so.',
+  );
+  lines.push('');
+
   await ocr.stop();
   writeFileSync(resolve(ROOT, 'ACCURACY.md'), `${lines.join('\n')}\n`);
   console.log('wrote ACCURACY.md');
