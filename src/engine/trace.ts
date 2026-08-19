@@ -159,8 +159,18 @@ export function traceCurve(
     }
   }
 
-  const thicknessPx = strokeThickness(raw);
-  const values = columnValues(mask, raw, thicknessPx, opts);
+  // Thickness and the corrected path depend on each other. A first pass off the
+  // raw centroids is enough to correct the turning points, and the corrected
+  // path is then a much better measure of how far the pen actually travelled -
+  // on a spiky chart the centroid path cuts every corner, comes out a third too
+  // short, and makes a 5 px line measure nearly 7. One pass settles it.
+  const firstPass = strokeThickness(raw);
+  const firstValues = columnValues(mask, raw, firstPass, opts);
+  const thicknessPx = strokeThickness(raw, firstValues);
+  const values =
+    Math.abs(thicknessPx - firstPass) < 0.05
+      ? firstValues
+      : columnValues(mask, raw, thicknessPx, opts);
 
   const points: TracePoint[] = [];
   let lastIdx = -1;
@@ -200,9 +210,12 @@ export function traceCurve(
  * line under 7 px wide, and every uncertainty derived from it was wrong to match.
  *
  * Only adjacent measured columns contribute, so a dashed line's gaps count
- * towards neither the area nor the length.
+ * towards neither the area nor the length. `path`, when given, is the corrected
+ * per-column value; the raw centroids underestimate the length wherever the
+ * curve turns sharply, and an underestimated length is an overestimated width.
  */
-function strokeThickness(runs: Array<Run | null>): number {
+function strokeThickness(runs: Array<Run | null>, path?: Float64Array): number {
+  const at = (x: number, run: Run) => (path ? path[x] : run.centroid);
   let area = 0;
   let length = 0;
   for (let x = 0; x < runs.length; x++) {
@@ -210,7 +223,7 @@ function strokeThickness(runs: Array<Run | null>): number {
     if (!run) continue;
     area += run.weight;
     const prev = runs[x - 1];
-    if (prev) length += Math.hypot(1, run.centroid - prev.centroid);
+    if (prev) length += Math.hypot(1, at(x, run) - at(x - 1, prev));
   }
   if (length <= 0) return runs.find(Boolean)?.weight ?? 0;
   // Half the trailing column of ink has no segment to be spread along, and a
@@ -307,17 +320,17 @@ function columnValues(
  * How far in from the outermost ink the plotted value sits, at a turning point.
  *
  * Half a stroke is the answer whenever the corner is drawn round, which is the
- * common case and the one the rule is stated for. It is not the answer for a
- * *mitred* corner: at a sharp vertex the miter runs on past the vertex - 5 px
- * past it on the corpus's sawtooth, drawn with a line under 2 px wide - and
- * stopping half a stroke in would read a peak the chart never plotted.
+ * common case and the one the rule is stated for: the cap reaches its full
+ * width half a stroke below the tip, and the vertex is at its centre.
  *
- * What both joins have in common is the cross-section: the drawn line is one
- * stroke wide everywhere except inside the join, so descending from the tip
- * until the ink is a full stroke across lands on the vertex either way. The
- * result is clamped between half a stroke - never less than the round-corner
- * answer - and the column's own centroid, so the correction can only ever move
- * the value between doing nothing and doing what the captain's rule says.
+ * It is not the answer for a *mitred* corner. There the join runs on past the
+ * vertex as a needle - five pixels past it on the corpus's sawtooth, drawn with
+ * a line under two pixels wide - and stopping half a stroke in would read a peak
+ * the chart never plotted. A needle is unmistakable in cross-section: half a
+ * stroke below a round cap the ink is already most of a stroke across, and half
+ * a stroke below a miter it is a sliver. So the sliver is what triggers the
+ * descent, with a wide margin between the two, and everything else takes the
+ * half-stroke answer unchanged.
  */
 function turnDepth(
   mask: SeriesMask,
@@ -328,8 +341,16 @@ function turnDepth(
   downward: boolean,
 ): number {
   const from = downward ? run.top : run.bottom;
-  const limit = Math.max(t / 2, Math.abs(run.centroid - from));
+  const half = t / 2;
   const step = downward ? 1 : -1;
+  const rowAt = (depth: number) => rowWidth(mask, Math.round(from + step * depth), x, minAlpha);
+  // Not a miter: the ordinary answer, and the one that has to stay exact,
+  // because it is what every rounded corner and every smooth peak relies on.
+  if (rowAt(half) >= t * 0.5) return half;
+
+  // A needle. Descend until the ink is a full stroke across, which is where the
+  // two legs of the join meet - the vertex - however far out the miter ran.
+  const limit = Math.max(half, Math.min(6 * t, Math.abs(run.centroid - from)));
   let prevY = from;
   let prevWidth = 0;
   for (let k = 0; k <= Math.ceil(limit) + 1; k++) {
@@ -339,12 +360,15 @@ function turnDepth(
     if (width >= t) {
       const share = width > prevWidth ? (t - prevWidth) / (width - prevWidth) : 1;
       const at = prevY + (y - prevY) * Math.max(0, Math.min(1, share));
-      return Math.min(limit, Math.max(t / 2, Math.abs(at - from)));
+      return Math.min(limit, Math.max(half, Math.abs(at - from)));
     }
     prevY = y;
     prevWidth = width;
   }
-  return limit;
+  // The cross-section never reached a full stroke. Half a stroke is the answer
+  // then, not "give up and keep the centroid": that would put the value back
+  // halfway down the spike, which is the whole defect.
+  return half;
 }
 
 /** Ink across one row, within the contiguous run of ink containing column `x`. */

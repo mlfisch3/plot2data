@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyse, buildSeries, describeUncertainty, formatValue } from '../src/engine/index.ts';
+import type { AnalysedSeries } from '../src/engine/pipeline.ts';
 import { loadImage } from '../test/helpers/load-image.ts';
 import { NodeOcr } from '../test/helpers/node-ocr.ts';
 import { CASES, runCase } from '../test/helpers/accuracy.ts';
@@ -27,6 +28,94 @@ interface RealCheck {
   expectScale?: { x?: 'linear' | 'log'; y?: 'linear' | 'log' };
   expectSeries?: number;
   expectMode?: 'curve' | 'marker';
+  /** Measure how much of each spike's height the trace reaches. */
+  measureSpikes?: boolean;
+}
+
+/**
+ * How much of a spike the trace actually reaches, on an image with no ground
+ * truth.
+ *
+ * The drawn ink is the only truth available, so the ink is what it is measured
+ * against: the topmost ink at a peak plus half a stroke is where the plotted
+ * value must be, and the bottommost ink at the trough between two peaks minus
+ * half a stroke is the other end. The ratio of the traced peak-to-trough
+ * amplitude to that one says how much of the spike came back, with no appeal
+ * to any number the chart does not itself contain.
+ */
+function spikeRecovery(analysed: AnalysedSeries): {
+  spikes: number;
+  meanRecovered: number;
+  medianRecovered: number;
+  worstRecovered: number;
+} | null {
+  const mask = analysed.mask;
+  const t = analysed.traced.thicknessPx;
+  if (!(t > 0) || analysed.traced.mode !== 'curve') return null;
+
+  const top = new Float64Array(mask.width).fill(NaN);
+  const bottom = new Float64Array(mask.width).fill(NaN);
+  for (let x = 0; x < mask.width; x++) {
+    let lo = -1;
+    let hi = -1;
+    for (let y = 0; y < mask.height; y++) {
+      if (mask.alpha[y * mask.width + x] >= 0.12) {
+        if (lo < 0) lo = y;
+        hi = y;
+      }
+    }
+    if (lo < 0) continue;
+    top[x] = lo + 0.5 - Math.min(1, mask.alpha[lo * mask.width + x]);
+    bottom[x] = hi - 0.5 + Math.min(1, mask.alpha[hi * mask.width + x]);
+  }
+
+  const traced = new Float64Array(mask.width).fill(NaN);
+  for (const p of analysed.traced.points) traced[Math.round(p.px)] = p.py;
+
+  // A peak worth measuring stands at least a few stroke widths above the ink
+  // either side of it; anything smaller is texture, not a spike.
+  const reach = 8;
+  const peaks: Array<{ x: number; tip: number; traced: number }> = [];
+  for (let x = reach; x < mask.width - reach; x++) {
+    if (!Number.isFinite(top[x])) continue;
+    let lowest = true;
+    let rise = 0;
+    for (let d = -reach; d <= reach; d++) {
+      if (!Number.isFinite(top[x + d])) continue;
+      if (top[x + d] < top[x] - 1e-9) lowest = false;
+      rise = Math.max(rise, top[x + d] - top[x]);
+    }
+    if (!lowest || rise < 3 * t) continue;
+    if (peaks.length && x - peaks[peaks.length - 1].x < reach) continue;
+    let best = Infinity;
+    for (let d = -reach; d <= reach; d++) {
+      if (Number.isFinite(traced[x + d])) best = Math.min(best, traced[x + d]);
+    }
+    peaks.push({ x, tip: top[x] + t / 2, traced: best });
+  }
+
+  const ratios: number[] = [];
+  for (let i = 1; i < peaks.length; i++) {
+    let inkLow = -Infinity;
+    let traceLow = -Infinity;
+    for (let x = peaks[i - 1].x; x <= peaks[i].x; x++) {
+      if (Number.isFinite(bottom[x])) inkLow = Math.max(inkLow, bottom[x]);
+      if (Number.isFinite(traced[x])) traceLow = Math.max(traceLow, traced[x]);
+    }
+    const inkAmplitude = inkLow - t / 2 - peaks[i].tip;
+    const tracedAmplitude = traceLow - peaks[i].traced;
+    if (inkAmplitude > 4 * t && Number.isFinite(tracedAmplitude)) {
+      ratios.push(tracedAmplitude / inkAmplitude);
+    }
+  }
+  if (ratios.length === 0) return null;
+  const sorted = [...ratios].sort((a, b) => a - b);
+  return {
+    spikes: ratios.length,
+    meanRecovered: ratios.reduce((a, b) => a + b, 0) / ratios.length,
+    medianRecovered: sorted[sorted.length >> 1],
+    worstRecovered: sorted[0],
+  };
 }
 
 const REAL: RealCheck[] = [
@@ -80,6 +169,16 @@ const REAL: RealCheck[] = [
     ],
   },
   {
+    file: 'examples/real/05-retail-sales-monthly.png',
+    title: 'U.S. Retail Sales, monthly',
+    demands: 'a dense spiky monthly series drawn with a pen wider than its own point spacing',
+    expect: { xMin: 1992, xMax: 2019.4, yMin: 120, yMax: 520 },
+    expectScale: { x: 'linear', y: 'linear' },
+    expectSeries: 1,
+    expectMode: 'curve',
+    measureSpikes: true,
+  },
+  {
     file: 'examples/real/04-hits-per-visit-redgreen.png',
     title: 'Hits average per visit',
     demands: 'non-round two-decimal tick labels, cream background, rotated axis title, dense grid',
@@ -111,7 +210,7 @@ async function main() {
   lines.push('## Synthetic corpus');
   lines.push('');
   lines.push(
-    'Fifteen plots rendered from analytic functions with Chart.js in headless Chrome, so ground truth is exact.',
+    `${CASES.length} plots rendered from analytic functions with Chart.js in headless Chrome, so ground truth is exact.`,
   );
   lines.push(
     'Error is RMS over 200 points resampled uniformly across the axis, as a percentage of the axis full-scale range,',
@@ -122,24 +221,80 @@ async function main() {
   lines.push('"Axis error" is how far the derived calibration itself lands from the true axis range.');
   lines.push('"Cover" is the fraction of the x range the extracted series spans.');
   lines.push('');
-  lines.push('| Case | Series | Mode | Scales | RMS error (% full scale) | Cover | Axis error x / y |');
-  lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+  lines.push(
+    '"Peak error" is the signed shortfall at the turning points, measured inwards, so a trace that shaves the tips off',
+  );
+  lines.push(
+    'its peaks shows a positive number here whatever its RMS says. It is measured at native resolution and reported',
+  );
+  lines.push('with the number of turning points a case has; a monotone curve has none and reads `-`.');
+  lines.push('');
+  lines.push(
+    '| Case | Series | Mode | Scales | RMS error (% full scale) | Cover | Peak error | Axis error x / y |',
+  );
+  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
 
   let worst = 0;
+  let worstPeak = 0;
   for (const spec of CASES) {
     const r = await runCase(spec, { ocr });
     worst = Math.max(worst, ...r.errors.map((e) => e.rmsPercent).filter(Number.isFinite));
+    for (const e of r.errors) {
+      if (e.peak.count > 0) worstPeak = Math.max(worstPeak, Math.abs(e.peak.shortfallPercent));
+    }
     lines.push(
       `| \`${r.id}\` | ${r.detectedSeries}/${r.expectedSeries} | ${r.mode} | ${r.xScale}/${r.yScale} | ` +
         `${r.errors.map((e) => `${e.rmsPercent.toFixed(3)}%`).join(', ')} | ` +
         `${r.errors.map((e) => `${(e.coverage * 100).toFixed(0)}%`).join(', ')} | ` +
+        `${r.errors
+          .map((e) => (e.peak.count ? `${e.peak.shortfallPercent.toFixed(3)}% (${e.peak.count})` : '-'))
+          .join(', ')} | ` +
         `${r.xRangeError.toFixed(3)}% / ${r.yRangeError.toFixed(3)}% |`,
     );
   }
   lines.push('');
   lines.push(
-    `Worst case across the whole synthetic corpus: **${worst.toFixed(3)}% of full scale**, against a target of "well under 1%".`,
+    `Worst case across the whole synthetic corpus: **${worst.toFixed(3)}% of full scale** RMS, against a target of ` +
+      `"well under 1%", and **${worstPeak.toFixed(3)}% of full scale** at the peaks.`,
   );
+  lines.push('');
+  lines.push('### Why peaks are measured separately');
+  lines.push('');
+  lines.push(
+    'A per-column intensity centroid is the right value only while the column holds one flat stroke. At a sharp apex',
+  );
+  lines.push(
+    'the same column holds the rising edge, the tip and the falling edge, and the centroid lands halfway down the spike.',
+  );
+  lines.push(
+    'A plot has few peaks and many columns, so averaging over x hides this almost perfectly: before the fix,',
+  );
+  lines.push(
+    '`narrow-peaks` scored 0.26% of full scale on RMS while losing 0.99% at every spike, and `sawtooth-sharp` 0.24%',
+  );
+  lines.push('while losing 0.51%. Measured before and after, as a percentage of full scale:');
+  lines.push('');
+  lines.push('| Case | Peak error before | Peak error after |');
+  lines.push('| --- | --- | --- |');
+  lines.push('| `narrow-peaks` (round corners) | 0.987% | -0.053% |');
+  lines.push('| `sawtooth-sharp` (mitred corners) | 0.511% | -0.263% |');
+  lines.push('');
+  lines.push(
+    'The two cases carry different corner styles on purpose. A **mitred** corner runs on past the vertex it is drawn',
+  );
+  lines.push(
+    'at - five pixels past it, for a 2 px line meeting itself at an acute angle - so stopping half a stroke in from the',
+  );
+  lines.push(
+    'outermost ink would read a peak the chart never plotted. The two are told apart by cross-section, which leaves no',
+  );
+  lines.push(
+    'room for doubt: half a stroke below a round cap the ink is already most of a stroke across, and half a stroke below',
+  );
+  lines.push(
+    'a miter it is a sliver. A sliver, and only a sliver, sends the tracer on down until the ink is a full stroke across,',
+  );
+  lines.push('which is where the two legs of the join meet - the vertex.');
   lines.push('');
 
   lines.push("## The captain's real screenshots");
@@ -196,6 +351,16 @@ async function main() {
       );
     }
 
+    if (check.measureSpikes) {
+      const recovery = analysis.series[0] ? spikeRecovery(analysis.series[0]) : null;
+      if (recovery) {
+        lines.push(
+          `| spike amplitude recovered | 100% of what is drawn | ${(recovery.meanRecovered * 100).toFixed(1)}% mean, ` +
+            `${(recovery.medianRecovered * 100).toFixed(1)}% median, ${(recovery.worstRecovered * 100).toFixed(1)}% worst, ` +
+            `over ${recovery.spikes} spikes |`,
+        );
+      }
+    }
     if (series[0]) {
       lines.push(`| reported uncertainty | - | ${describeUncertainty(series[0])} |`);
     }
@@ -236,6 +401,14 @@ async function main() {
     '| `04-hits-per-visit` | pass | Non-round two-decimal tick labels handled by the least-squares fit; the two ' +
       'labels OCR misread are discarded and reported. Cream background and rotated axis title cause no trouble. |',
   );
+  lines.push(
+    '| `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain\'s ' +
+      'own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 6.7 px wide ' +
+      'and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink: the ' +
+      'automatic point count proposes 293 against a true 331, and says what it counted. Spike amplitude recovered ' +
+      'rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the ' +
+      'mean peak shortfall fell from 4.30% of full scale to 0.01%. |',
+  );
   lines.push('');
   lines.push('## Known limits');
   lines.push('');
@@ -259,6 +432,24 @@ async function main() {
   lines.push(
     '- **Line and marker drawn together** merge into one component, so the tool traces the curve rather than ' +
       'returning the marker positions. That is the honest reading of the ink, and the CSV says so.',
+  );
+  lines.push(
+    '- **The worst individual spike is read lower than the average one.** On the retail-sales chart the mean spike ' +
+      'recovers about 95% of its drawn amplitude and the median about 98%, but the worst single spike recovers ' +
+      'about half. Those are the spikes whose neighbours are close enough that the ink merges, leaving no separate ' +
+      'tip to find.',
+  );
+  lines.push(
+    '- **A peak at a mitred corner is read a little high.** The correction descends from the outermost ink until ' +
+      'the ink is one stroke across, which finds the vertex for a round corner exactly and for a mitred one to ' +
+      'within a fraction of a stroke. On the corpus\'s deliberately extreme sawtooth that is -0.26% of full scale, ' +
+      'against 0.51% of clipping before.',
+  );
+  lines.push(
+    '- **The automatic point count is an estimate.** It counts the kinks in the trace, so a line drawn wider than ' +
+      'the spacing of its own data points comes out low - 293 against 331 on the retail-sales chart. Across the ' +
+      'real screenshots it lands within about a factor of two of the true point count, which is the right order for ' +
+      'a default; the count is editable and one point per pixel column is always available.',
   );
   lines.push('');
 
