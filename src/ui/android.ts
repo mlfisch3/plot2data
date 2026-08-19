@@ -8,7 +8,7 @@
  * here is conditional at the call sites.
  */
 
-import { downloadText } from './image-io.ts';
+import { downloadBlob } from './image-io.ts';
 
 export interface IncomingImage {
   /** Stable id for the cached copy the shell holds; survives process death. */
@@ -34,6 +34,13 @@ interface NativeBridge {
   ready(): void;
   saveCsv(name: string, text: string): void;
   shareCsv(name: string, text: string): void;
+  /**
+   * Binary export, base64 encoded. Added for the xlsx workbook; the CSV routes
+   * stay as they were, because a text string is the cheaper path for the common
+   * case and an older shell still has to serve it.
+   */
+  saveBinary?(name: string, base64: string, mime: string): void;
+  shareBinary?(name: string, base64: string, mime: string): void;
 }
 
 declare global {
@@ -98,6 +105,9 @@ export async function fetchIncoming(image: IncomingImage): Promise<File> {
 
 export type CsvDestination = 'save' | 'share';
 
+export const CSV_MIME = 'text/csv';
+export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 /** Sharing a file is offered when the platform can actually do it. */
 export function canShareCsv(): boolean {
   if (onAndroid) return true;
@@ -110,25 +120,38 @@ export function canShareCsv(): boolean {
 }
 
 /**
- * Get a CSV off the device.
+ * Get a file off the device.
  *
  * On Android a `download` attribute does nothing at all, so both routes go
  * through the shell: `save` opens the system file picker, `share` hands the
  * file to another app. In a browser they are a download and a Web Share.
+ *
+ * Text still goes over the bridge as text. A workbook cannot, so it goes as
+ * base64 - which costs a third more bytes, but a spreadsheet of a few thousand
+ * rows is small and the alternative is a second transport for one file type.
  */
-export async function exportCsv(
+export async function exportFile(
   destination: CsvDestination,
   filename: string,
-  csv: string,
+  data: string | Uint8Array,
+  mime: string = CSV_MIME,
 ): Promise<void> {
   if (native) {
-    if (destination === 'share') native.shareCsv(filename, csv);
-    else native.saveCsv(filename, csv);
+    if (typeof data === 'string') {
+      if (destination === 'share') native.shareCsv(filename, data);
+      else native.saveCsv(filename, data);
+      return;
+    }
+    const base64 = toBase64(data);
+    const send = destination === 'share' ? native.shareBinary : native.saveBinary;
+    if (!send) throw new Error('This version of the app cannot save that format. Export a CSV instead.');
+    send.call(native, filename, base64, mime);
     return;
   }
 
+  const blobParts: BlobPart[] = [typeof data === 'string' ? data : new Uint8Array(data)];
   if (destination === 'share' && canShareCsv()) {
-    const file = new File([csv], filename, { type: 'text/csv' });
+    const file = new File(blobParts, filename, { type: mime });
     try {
       await navigator.share({ files: [file], title: filename });
       return;
@@ -139,5 +162,15 @@ export async function exportCsv(
     }
   }
 
-  downloadText(filename, csv);
+  downloadBlob(filename, new Blob(blobParts, { type: mime }));
+}
+
+/** Base64 in chunks: one `String.fromCharCode` over a megabyte blows the stack. */
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }

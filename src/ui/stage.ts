@@ -10,11 +10,14 @@
  * and a phone screen is held at arm's length.
  *
  * Anchors are drawn as full-height (or full-width) guide lines with a chunky
- * grab handle: on a phone a thin line is impossible to hit.
+ * grab handle: on a phone a thin line is impossible to hit. They are named
+ * X1/X2 across the bottom and Y1/Y2 up the side, in the axis colours, and while
+ * one is being dragged a magnifier opens on the pixels underneath it.
  */
 
 import type { Analysis } from '../engine/pipeline.ts';
 import type { Calibration, Rect, RGB } from '../engine/types.ts';
+import { drawMagnifier, type MagnifierGuide } from './magnifier.ts';
 
 export type AnchorId = 'xa' | 'xb' | 'ya' | 'yb';
 export type CropHandle = 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -25,6 +28,16 @@ export interface StageCallbacks {
   /** Fires when the zoom or pan changes, so the UI can offer a way back to fit. */
   onViewChange?(zoomed: boolean): void;
 }
+
+/** What each anchor is called on screen, on the handle and in the export. */
+export const ANCHOR_LABELS: Record<AnchorId, string> = {
+  xa: 'X1',
+  xb: 'X2',
+  ya: 'Y1',
+  yb: 'Y2',
+};
+
+export const AXIS_COLOURS = { x: '#f76707', y: '#12b886' } as const;
 
 interface View {
   scale: number;
@@ -65,6 +78,8 @@ export class Stage {
   private downAt: { x: number; y: number; time: number } | null = null;
   private lastTap: { x: number; y: number; time: number } | null = null;
   private moved = false;
+  /** Where the pointer is while an anchor is being dragged, for the magnifier. */
+  private probe: { x: number; y: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement, private callbacks: StageCallbacks) {
     this.canvas = canvas;
@@ -114,6 +129,23 @@ export class Stage {
 
   get zoomed(): boolean {
     return this.fitScale > 0 && this.view.scale > this.fitScale * 1.02;
+  }
+
+  /** The image rectangle currently on screen, for a linked panel to match. */
+  visibleWindow(): { x0: number; y0: number; x1: number; y1: number } {
+    const a = this.toImage(0, 0);
+    const b = this.toImage(this.cssWidth(), this.cssHeight());
+    return { x0: a.x, y0: a.y, x1: b.x, y1: b.y };
+  }
+
+  /** Show this image rectangle: the x range exactly, the y range centred. */
+  showWindow(w: { x0: number; y0: number; x1: number; y1: number }): void {
+    if (!this.bitmap || !(w.x1 > w.x0) || this.cssWidth() <= 0) return;
+    this.view.scale = Math.max(this.fitScale, this.cssWidth() / (w.x1 - w.x0));
+    this.view.dx = -w.x0 * this.view.scale;
+    this.view.dy = this.cssHeight() / 2 - ((w.y0 + w.y1) / 2) * this.view.scale;
+    this.clampView();
+    this.render();
   }
 
   /** Back to the whole image, centred. */
@@ -272,7 +304,10 @@ export class Stage {
     if (this.mode === 'anchors') {
       const id = this.anchorAt(p);
       this.gesture = id ? { kind: 'anchor', id } : this.beginPan(p);
-      if (id) this.render();
+      if (id) {
+        this.probe = p;
+        this.render();
+      }
       return;
     }
 
@@ -337,6 +372,7 @@ export class Stage {
 
     if (gesture?.kind === 'anchor') {
       const img = this.toImage(p.x, p.y);
+      this.probe = p;
       this.callbacks.onAnchorChange(gesture.id, gesture.id.startsWith('x') ? img.x : img.y);
       return;
     }
@@ -384,6 +420,7 @@ export class Stage {
 
     const wasAnchor = this.gesture?.kind === 'anchor';
     this.gesture = null;
+    this.probe = null;
     if (wasAnchor) this.render();
 
     const down = this.downAt;
@@ -535,10 +572,22 @@ export class Stage {
   private handlePosition(a: { id: AnchorId; axis: 'x' | 'y'; px: number }): { x: number; y: number } {
     const s = this.toScreen(a.axis === 'x' ? a.px : 0, a.axis === 'y' ? a.px : 0);
     const lane = a.id === 'xa' || a.id === 'ya' ? GRAB - 4 : GRAB + 26;
-    const clamp = (v: number, extent: number) => Math.max(GRAB, Math.min(extent - GRAB, v));
+    // Zoomed in far enough, every guide is off screen and all four handles are
+    // clamped to their edges - where the x row and the y column meet in the
+    // corner, and two handles would sit on top of each other. Each axis's
+    // handles keep clear of the other axis's lane, so the pair in the corner
+    // stays two separate targets.
+    const other = GRAB + 26 + HANDLE / 2 + 6;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
     return a.axis === 'x'
-      ? { x: clamp(s.x, this.cssWidth()), y: this.cssHeight() - lane }
-      : { x: lane, y: clamp(s.y, this.cssHeight()) };
+      ? {
+          x: clamp(s.x, other, this.cssWidth() - GRAB),
+          y: this.cssHeight() - lane,
+        }
+      : {
+          x: lane,
+          y: clamp(s.y, GRAB, this.cssHeight() - other),
+        };
   }
 
   /* -------------------------------------------------------------- drawing */
@@ -731,12 +780,75 @@ export class Stage {
       ctx.arc(handle.x, handle.y, active ? HANDLE / 2 : HANDLE / 2.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+      ctx.font = '700 10px ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(a.id === 'xa' || a.id === 'ya' ? 'A' : 'B', handle.x, handle.y + 0.5);
+      ctx.fillText(ANCHOR_LABELS[a.id], handle.x, handle.y + 0.5);
       ctx.restore();
     }
+
+    this.drawDragMagnifier();
+  }
+
+  /**
+   * The magnifier, while a marker is being dragged.
+   *
+   * Only the guide lines are passed through to it, never the handles: the
+   * handles are screen furniture parked at the edge of the canvas and would
+   * mean nothing blown up eight times.
+   */
+  private drawDragMagnifier(): void {
+    const gesture = this.gesture;
+    if (!gesture || gesture.kind !== 'anchor' || !this.probe || !this.bitmap || !this.calibration) return;
+    const image = this.toImage(this.probe.x, this.probe.y);
+    const guides: MagnifierGuide[] = this.anchorPositions().map((a) => ({
+      axis: a.axis,
+      px: a.px,
+      colour: a.axis === 'x' ? AXIS_COLOURS.x : AXIS_COLOURS.y,
+    }));
+    const dragged = this.anchorPositions().find((a) => a.id === gesture.id)!;
+    drawMagnifier(this.ctx, {
+      bitmap: this.bitmap,
+      at: this.probe,
+      image,
+      canvasWidth: this.cssWidth(),
+      canvasHeight: this.cssHeight(),
+      guides,
+      label: `${ANCHOR_LABELS[gesture.id]} at ${dragged.px.toFixed(1)} px`,
+    });
+  }
+
+  /**
+   * Zoom about the tick nearest the middle of the view.
+   *
+   * Zooming in on nothing in particular is useless, and the thing a marker is
+   * nearly always being lined up against is a tick. It is where the view
+   * *lands*, never where the marker snaps to: an anchor may be put anywhere,
+   * including somewhere no tick was drawn.
+   */
+  zoomStep(factor: number): void {
+    if (!this.bitmap) return;
+    const centre = this.toImage(this.cssWidth() / 2, this.cssHeight() / 2);
+    const target = factor > 1 ? this.nearestTick(centre) : centre;
+    const screen = this.toScreen(target.x, target.y);
+    this.zoomAbout(screen.x, screen.y, factor);
+    this.render();
+  }
+
+  private nearestTick(to: { x: number; y: number }): { x: number; y: number } {
+    const analysis = this.analysis;
+    if (!analysis) return to;
+    const near = (values: number[], v: number) =>
+      values.length ? values.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a)) : v;
+    const x = near(analysis.xTicks.map((t) => t.px), to.x);
+    const y = near(analysis.yTicks.map((t) => t.px), to.y);
+    // Only pull towards a tick that is actually close by; a tick half a plot
+    // away is not what the user is looking at.
+    const limit = Math.max(40, this.cssWidth() / (4 * Math.max(1e-6, this.view.scale)));
+    return {
+      x: Math.abs(x - to.x) < limit ? x : to.x,
+      y: Math.abs(y - to.y) < limit ? y : to.y,
+    };
   }
 }
 
