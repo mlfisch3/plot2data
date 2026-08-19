@@ -56,7 +56,8 @@ export class BrowserOcr implements OcrProvider {
           workerPath: assetUrl('./tesseract/worker.min.js'),
           corePath: assetUrl('./tesseract/'),
           langPath: assetUrl('./tessdata'),
-          gzip: true,
+          // The language data ships expanded; see tools/copy-tesseract.ts.
+          gzip: false,
           cacheMethod: 'none',
           logger: () => {},
         }), 30_000);

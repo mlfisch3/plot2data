@@ -29,7 +29,7 @@ export class NodeOcr implements OcrProvider {
       // A plain filesystem path makes tesseract.js read the traineddata with
       // fs instead of fetch, which keeps the tests entirely offline.
       langPath: resolve(ROOT, 'public/tessdata'),
-      gzip: true,
+      gzip: false,
       cacheMethod: 'none',
       logger: () => {},
     });

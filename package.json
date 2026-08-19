@@ -12,11 +12,11 @@
     "android:check": "node --experimental-strip-types tools/android-apk.ts testDebugUnitTest lintDebug",
     "preview": "vite preview",
     "assets": "node --experimental-strip-types tools/copy-tesseract.ts",
-    "test": "vitest run",
+    "test": "npm run assets && vitest run",
     "test:watch": "vitest",
     "corpus": "node --experimental-strip-types tools/generate-corpus.ts",
-    "accuracy": "vitest run test/accuracy.test.ts --reporter=verbose",
-    "report": "node --experimental-strip-types tools/accuracy-report.ts"
+    "accuracy": "npm run assets && vitest run test/accuracy.test.ts --reporter=verbose",
+    "report": "npm run assets && node --experimental-strip-types tools/accuracy-report.ts"
   },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
