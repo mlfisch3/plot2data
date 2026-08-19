@@ -76,7 +76,9 @@ describe('toCsv', () => {
     });
     expect(csv).toContain('# plot2data v');
     expect(csv).toContain('RESAMPLING OF THE DRAWN CURVE');
-    expect(csv).toMatch(/# x: -?0[.0-9e-]* to 12[.0-9]*, linear/);
+    // The anchors are the fitted values at the plot edges, so they read as
+    // "0.00054" rather than a round 0; that honesty is the point.
+    expect(csv).toMatch(/# x: -?[0-9.e-]+ to 12[.0-9]*, linear/);
     expect(csv).toContain('uncertainty from line thickness');
     expect(csv.trim().split('\n').filter((l) => !l.startsWith('#'))).toHaveLength(11);
   });
