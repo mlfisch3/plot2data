@@ -164,7 +164,10 @@ export interface TracedSeries {
   colour: RGB;
   mode: ExtractionMode;
   points: TracePoint[];
-  /** Median vertical ink thickness in pixels; drives the uncertainty estimate. */
+  /**
+   * Stroke thickness in pixels, measured perpendicular to the path; drives the
+   * uncertainty estimate. For markers this is the median marker height.
+   */
   thicknessPx: number;
   /** Median horizontal extent of a marker in pixels (marker mode only). */
   markerWidthPx: number;

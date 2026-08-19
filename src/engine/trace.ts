@@ -1,10 +1,19 @@
 /**
  * Path tracing and marker extraction in pixel space.
  *
- * Curve mode walks the plot's x columns and takes the *intensity-weighted
- * centroid* of the data ink in each column. Because an antialiased edge pixel
- * carries a partial alpha, that centroid is accurate to a fraction of a pixel -
- * thresholding and taking the middle of the run throws that accuracy away.
+ * Curve mode walks the plot's x columns and reduces the data ink in each column
+ * to one value. Where the curve is locally flat the *intensity-weighted
+ * centroid* is that value: an antialiased edge pixel carries a partial alpha, so
+ * the centroid is accurate to a fraction of a pixel, and thresholding and taking
+ * the middle of the run would throw that accuracy away.
+ *
+ * A centroid is only right while the ink in the column is one flat stroke. At a
+ * sharp apex the same column holds the rising edge, the tip and the falling
+ * edge, and the centroid then lands halfway down the spike - which is exactly
+ * how a spiky series comes back with its peaks shaved off. The drawn line has a
+ * roughly uniform thickness `t` and the plotted value sits at the *centre* of
+ * the stroke, so at a turning point the value is half a stroke in from the
+ * outermost ink. See `columnValues` for how the two regimes are blended.
  */
 
 import type { Component, SeriesMask } from './segment.ts';
@@ -17,22 +26,43 @@ export interface TraceOptions {
   minAlpha: number;
   /** How far a run may sit from the previous column's run and still continue it. */
   continuityTolerancePx: number;
+  /**
+   * Ink extent, as a multiple of the stroke thickness, at which a column stops
+   * counting as locally flat. Below this the centroid is kept unchanged, which
+   * is what preserves the sub-pixel accuracy the corpus measures.
+   */
+  flatSpanRatio: number;
+  /** Extent ratio at which a column is treated as fully steep or turning. */
+  steepSpanRatio: number;
 }
 
 export const DEFAULT_TRACE_OPTIONS: TraceOptions = {
   maxGapPx: 24,
   minAlpha: 0.12,
   continuityTolerancePx: 6,
+  flatSpanRatio: 1.25,
+  steepSpanRatio: 2,
 };
 
 interface Run {
+  /** First and last inked row of the run. */
   lo: number;
   hi: number;
+  /** Sum of alpha: the ink *area* in this column, in pixels. */
   weight: number;
   centroid: number;
+  /** Sub-pixel outermost ink, from the coverage of the two edge rows. */
+  top: number;
+  bottom: number;
 }
 
-/** Contiguous vertical runs of ink in one column, with sub-pixel centroids. */
+/**
+ * Contiguous vertical runs of ink in one column, with sub-pixel centroids.
+ *
+ * `alpha` is a coverage fraction, not an intensity, so a row's alpha is the
+ * share of that pixel the stroke covers. That makes the outer edges sub-pixel
+ * too: a top row only 30% covered puts the true edge 0.2 px below its centre.
+ */
 function columnRuns(mask: SeriesMask, x: number, minAlpha: number): Run[] {
   const runs: Run[] = [];
   let y = 0;
@@ -50,7 +80,17 @@ function columnRuns(mask: SeriesMask, x: number, minAlpha: number): Run[] {
       moment += a * y;
       y++;
     }
-    runs.push({ lo, hi: y - 1, weight, centroid: weight > 0 ? moment / weight : lo });
+    const hi = y - 1;
+    const aLo = Math.min(1, mask.alpha[lo * mask.width + x]);
+    const aHi = Math.min(1, mask.alpha[hi * mask.width + x]);
+    runs.push({
+      lo,
+      hi,
+      weight,
+      centroid: weight > 0 ? moment / weight : lo,
+      top: lo + 0.5 - aLo,
+      bottom: hi - 0.5 + aHi,
+    });
   }
   return runs;
 }
@@ -65,9 +105,9 @@ function columnRuns(mask: SeriesMask, x: number, minAlpha: number): Run[] {
 export function traceCurve(
   mask: SeriesMask,
   options: Partial<TraceOptions> = {},
-): { points: TracePoint[]; thicknessPx: number; strokeWidthPx: number } {
+): { points: TracePoint[]; thicknessPx: number } {
   const opts = { ...DEFAULT_TRACE_OPTIONS, ...options };
-  const raw: Array<{ run: Run } | null> = new Array(mask.width).fill(null);
+  const raw: Array<Run | null> = new Array(mask.width).fill(null);
 
   // Seed from the column with the single heaviest run so the walk starts on the
   // path rather than on whatever happens to be at the left edge.
@@ -84,7 +124,7 @@ export function traceCurve(
       }
     }
   }
-  if (!seedRun || seedX < 0) return { points: [], thicknessPx: 0, strokeWidthPx: 0 };
+  if (!seedRun || seedX < 0) return { points: [], thicknessPx: 0 };
 
   const pick = (runs: Run[], prev: Run | null): Run | null => {
     if (runs.length === 0) return null;
@@ -101,12 +141,12 @@ export function traceCurve(
     });
   };
 
-  raw[seedX] = { run: seedRun };
+  raw[seedX] = seedRun;
   let prev: Run | null = seedRun;
   for (let x = seedX + 1; x < mask.width; x++) {
     const r = pick(allRuns[x], prev);
     if (r) {
-      raw[x] = { run: r };
+      raw[x] = r;
       prev = r;
     }
   }
@@ -114,16 +154,19 @@ export function traceCurve(
   for (let x = seedX - 1; x >= 0; x--) {
     const r = pick(allRuns[x], prev);
     if (r) {
-      raw[x] = { run: r };
+      raw[x] = r;
       prev = r;
     }
   }
 
+  const thicknessPx = strokeThickness(raw);
+  const values = columnValues(raw, thicknessPx, opts);
+
   const points: TracePoint[] = [];
   let lastIdx = -1;
   for (let x = 0; x < mask.width; x++) {
-    const entry = raw[x];
-    if (!entry) continue;
+    const run = raw[x];
+    if (!run) continue;
     if (lastIdx >= 0 && x - lastIdx > 1 && x - lastIdx - 1 <= opts.maxGapPx) {
       // Bridge dashes, marker gaps and antialiasing dropouts by continuity.
       const a = points[points.length - 1];
@@ -132,38 +175,137 @@ export function traceCurve(
         const t = k / span;
         points.push({
           px: lastIdx + k,
-          py: a.py + t * (entry.run.centroid - a.py),
-          weight: a.weight + t * (entry.run.weight - a.weight),
+          py: a.py + t * (values[x] - a.py),
+          weight: a.weight + t * (run.weight - a.weight),
           interpolated: true,
         });
       }
     }
-    points.push({ px: x, py: entry.run.centroid, weight: entry.run.weight, interpolated: false });
+    points.push({ px: x, py: values[x], weight: run.weight, interpolated: false });
     lastIdx = x;
   }
 
-  const measured = points.filter((p) => !p.interpolated).map((p) => p.weight);
-  const thicknessPx = median(measured);
-  return { points, thicknessPx, strokeWidthPx: Math.min(thicknessPx, rowThickness(mask, opts.minAlpha)) };
+  return { points, thicknessPx };
 }
 
-/** Median horizontal ink thickness; with the vertical one this bounds the stroke width. */
-function rowThickness(mask: SeriesMask, minAlpha: number): number {
-  const widths: number[] = [];
-  for (let y = 0; y < mask.height; y++) {
-    let run = 0;
-    for (let x = 0; x < mask.width; x++) {
-      const a = mask.alpha[y * mask.width + x];
-      if (a >= minAlpha) {
-        run += a;
-      } else if (run > 0) {
-        widths.push(run);
-        run = 0;
+/**
+ * Stroke thickness, perpendicular to the path.
+ *
+ * A stroke of uniform width `t` drawn along a path of length `L` covers `t * L`
+ * of ink, so dividing the measured ink area by the measured path length gives
+ * `t` directly. That holds however steep the line is, which the older estimate -
+ * the median vertical ink extent per column - does not: on a spiky series most
+ * columns are steep, and their vertical extent is several times the stroke's
+ * real width. On the captain's retail-sales chart that estimate read 23 px for a
+ * line under 7 px wide, and every uncertainty derived from it was wrong to match.
+ *
+ * Only adjacent measured columns contribute, so a dashed line's gaps count
+ * towards neither the area nor the length.
+ */
+function strokeThickness(runs: Array<Run | null>): number {
+  let area = 0;
+  let length = 0;
+  for (let x = 0; x < runs.length; x++) {
+    const run = runs[x];
+    if (!run) continue;
+    area += run.weight;
+    const prev = runs[x - 1];
+    if (prev) length += Math.hypot(1, run.centroid - prev.centroid);
+  }
+  if (length <= 0) return runs.find(Boolean)?.weight ?? 0;
+  // Half the trailing column of ink has no segment to be spread along, and a
+  // very short trace would be dominated by that; one column of slack is enough.
+  return area / (length + 1);
+}
+
+/** Hermite ramp: 0 below `lo`, 1 above `hi`, smooth at both ends. */
+function smoothstep(lo: number, hi: number, v: number): number {
+  if (!(hi > lo)) return v >= hi ? 1 : 0;
+  const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * One representative value per column, blending the flat and the turning regime.
+ *
+ * Per column the ink span is compared with the stroke thickness `t`:
+ *
+ * - span about `t` - the column holds one flat stroke, so the centroid is the
+ *   value, and the sub-pixel accuracy of the rest of the corpus is untouched.
+ * - span well over `t` - the column holds a steep or turning segment and the
+ *   centroid means nothing. Which value to take is decided by the neighbours:
+ *   at a local maximum the curve reaches `topmost ink + t/2`, at a local minimum
+ *   `bottommost ink - t/2`, and on a monotone steep run the curve genuinely
+ *   passes through the whole span, so the value that joins up with the columns
+ *   either side is the geometric middle of the span.
+ *
+ * Both the steepness and the turn are weights rather than switches, so there is
+ * no visible seam where one rule takes over from the other. Note that on a flat
+ * column `topmost ink + t/2` *is* the centroid, which is what makes the blend
+ * continuous rather than merely smooth.
+ */
+function columnValues(
+  runs: Array<Run | null>,
+  thickness: number,
+  opts: TraceOptions,
+): Float64Array {
+  const values = new Float64Array(runs.length);
+  for (let x = 0; x < runs.length; x++) values[x] = runs[x]?.centroid ?? 0;
+  const t = thickness;
+  if (!(t > 0)) return values;
+
+  // A turn has to be visible across at least the width of the stroke: the tip of
+  // a spike drawn with a 6 px pen is 6 px of columns that all reach the same
+  // height, and a one-column comparison would see a plateau rather than a peak.
+  const reach = Math.max(2, Math.round(t));
+
+  for (let x = 0; x < runs.length; x++) {
+    const run = runs[x];
+    if (!run) continue;
+    const span = run.bottom - run.top;
+    const steep = smoothstep(opts.flatSpanRatio, opts.steepSpanRatio, span / t);
+    if (steep <= 0) continue;
+
+    // How far the outer edge of the ink climbs away from this column on each
+    // side. A genuine extremum rises on both sides; a steep monotone run does
+    // not, so the weaker side is what counts.
+    let leftUp = -Infinity;
+    let rightUp = -Infinity;
+    let leftDown = -Infinity;
+    let rightDown = -Infinity;
+    for (let d = 1; d <= reach; d++) {
+      const l = runs[x - d];
+      const r = runs[x + d];
+      if (l) {
+        leftUp = Math.max(leftUp, l.top - run.top);
+        leftDown = Math.max(leftDown, run.bottom - l.bottom);
+      }
+      if (r) {
+        rightUp = Math.max(rightUp, r.top - run.top);
+        rightDown = Math.max(rightDown, run.bottom - r.bottom);
       }
     }
-    if (run > 0) widths.push(run);
+    // A column at the very end of the trace has one side only; judge it on that
+    // side rather than refusing to correct an endpoint spike.
+    const peak = clamp01(Math.min(sided(leftUp), sided(rightUp)) / t);
+    const trough = clamp01(Math.min(sided(leftDown), sided(rightDown)) / t);
+    const turn = Math.max(-1, Math.min(1, peak - trough));
+
+    const middle = (run.top + run.bottom) / 2;
+    const extreme = turn > 0 ? run.top + t / 2 : run.bottom - t / 2;
+    const steepValue = middle + Math.abs(turn) * (extreme - middle);
+    values[x] = run.centroid + steep * (steepValue - run.centroid);
   }
-  return widths.length ? median(widths) : 0;
+  return values;
+}
+
+/** A missing neighbour is not evidence either way, so it does not veto a turn. */
+function sided(v: number): number {
+  return v === -Infinity ? Infinity : v;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 function median(values: number[]): number {
@@ -174,8 +316,11 @@ function median(values: number[]): number {
 }
 
 /**
- * Marker mode: each component's alpha-weighted centroid is a real sample of the
- * underlying data, not a resampling of a drawn line.
+ * Marker mode: each component's alpha-weighted centre of mass is a real sample
+ * of the underlying data, not a resampling of a drawn line. The centre of mass
+ * rather than the middle of the bounding box, for the same reason the curve
+ * tracer weights by alpha: the partial coverage of an antialiased marker edge
+ * carries the sub-pixel position, and a bounding box quantises it away.
  */
 export function traceMarkers(components: Component[]): {
   points: TracePoint[];
