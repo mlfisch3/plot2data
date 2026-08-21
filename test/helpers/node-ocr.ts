@@ -20,8 +20,11 @@ function encodePng(img: ImageBuffer): Buffer {
   return PNG.sync.write(png);
 }
 
+const CHARSET = '0123456789.,-+%$kKMBbnTeEx^';
+
 export class NodeOcr implements OcrProvider {
   private worker: Worker | null = null;
+  private charset = CHARSET;
 
   async start(): Promise<void> {
     if (this.worker) return;
@@ -34,14 +37,20 @@ export class NodeOcr implements OcrProvider {
       logger: () => {},
     });
     await this.worker.setParameters({
-      tessedit_char_whitelist: '0123456789.,-+%$kKMBbnTeEx^',
+      tessedit_char_whitelist: CHARSET,
       // A tick label is a single line of text, never a paragraph.
       tessedit_pageseg_mode: '7' as never,
     });
+    this.charset = CHARSET;
   }
 
-  async recognise(image: ImageBuffer): Promise<OcrResult> {
+  async recognise(image: ImageBuffer, hint?: { charset?: string }): Promise<OcrResult> {
     if (!this.worker) await this.start();
+    const wanted = hint?.charset ?? CHARSET;
+    if (wanted !== this.charset) {
+      await this.worker!.setParameters({ tessedit_char_whitelist: wanted });
+      this.charset = wanted;
+    }
     const { data } = await this.worker!.recognize(encodePng(image));
     return { text: data.text.replace(/\s+/g, ' ').trim(), confidence: data.confidence / 100 };
   }

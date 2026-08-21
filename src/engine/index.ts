@@ -104,6 +104,13 @@ export {
 } from './pipeline.ts';
 export { suggestSampling, type SamplingSuggestion } from './sampling.ts';
 export {
+  looksLikeALabel,
+  readLegendLabels,
+  LABEL_CHARSET,
+  type LegendLabel,
+  type LegendOptions,
+} from './legend.ts';
+export {
   compact,
   csvHeader,
   describeUncertainty,

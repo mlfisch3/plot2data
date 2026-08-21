@@ -9,6 +9,7 @@
 import { detectFrame, type FrameOptions } from './frame.ts';
 import { detectTicks, type TickOptions, type TickScan } from './ticks.ts';
 import { readOffsetAnnotations, readTickLabels, axisUnit, type OcrProvider } from './labels.ts';
+import { readLegendLabels, type LegendLabel } from './legend.ts';
 import { calibrateAxis, isValid } from './calibration.ts';
 import {
   buildMask,
@@ -68,6 +69,11 @@ export interface AnalyseOptions {
   mode?: ExtractionMode;
   /** Cap on how many series to trace. */
   maxSeries?: number;
+  /**
+   * Read series names off the chart's legend. Defaults to doing it whenever an
+   * OCR provider is available; `false` skips the work entirely.
+   */
+  readLabels?: boolean;
 }
 
 export interface AnalysedSeries {
@@ -89,6 +95,8 @@ export interface AnalysedSeries {
   rejectedComponents: number;
   /** Kept blobs wider than one marker: several markers drawn touching. */
   mergedComponents: number;
+  /** A name read off the chart's legend, when one matched this colour. */
+  label?: LegendLabel;
 }
 
 /** The reading of one analysed series under a given mode. */
@@ -107,6 +115,8 @@ export interface Analysis {
   annotations: OffsetAnnotation[];
   candidates: SeriesCandidate[];
   series: AnalysedSeries[];
+  /** Legend text matched to a series by colour. Cosmetic; see `legend.ts`. */
+  legend: LegendLabel[];
   /** Calibration pre-filled from OCR; every field is user-editable. */
   calibration: Calibration;
   units: { x?: string; y?: string };
@@ -340,6 +350,20 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
     });
   }
 
+  // Names last, and only after the data ink is known, so a marker can never be
+  // mistaken for a letter. Nothing downstream of this touches a number.
+  const legend =
+    (options.readLabels ?? true)
+      ? await readLegendLabels(
+          img,
+          frame,
+          series.map((s) => s.traced.colour),
+          ocr,
+          { dataMasks: series.map((s) => s.mask) },
+        )
+      : [];
+  for (const label of legend) series[label.index].label = label;
+
   return {
     width: img.width,
     height: img.height,
@@ -351,6 +375,7 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
     annotations,
     candidates,
     series,
+    legend,
     calibration,
     units,
     warnings,

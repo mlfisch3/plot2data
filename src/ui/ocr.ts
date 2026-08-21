@@ -37,6 +37,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export class BrowserOcr implements OcrProvider {
   private worker: Worker | null = null;
   private starting: Promise<void> | null = null;
+  /** The whitelist currently loaded, so it is only re-set when it changes. */
+  private charset = CHARSET;
   /** Set once startup has failed, so we stop retrying on every label. */
   failed = false;
 
@@ -66,6 +68,7 @@ export class BrowserOcr implements OcrProvider {
           // A tick label is a single line of text, never a paragraph.
           tessedit_pageseg_mode: '7' as never,
         });
+        this.charset = CHARSET;
         this.worker = worker;
       } catch (error) {
         this.failed = true;
@@ -79,9 +82,16 @@ export class BrowserOcr implements OcrProvider {
     return this.worker !== null;
   }
 
-  async recognise(image: ImageBuffer): Promise<OcrResult> {
+  async recognise(image: ImageBuffer, hint?: { charset?: string }): Promise<OcrResult> {
     if (!this.worker) await this.start();
     if (!this.worker) throw new Error('OCR unavailable');
+    // A tick label is digits; a legend label is words. One whitelist cannot
+    // serve both, so the caller says which it is asking for.
+    const wanted = hint?.charset ?? CHARSET;
+    if (wanted !== this.charset) {
+      await this.worker.setParameters({ tessedit_char_whitelist: wanted });
+      this.charset = wanted;
+    }
     const { data } = await this.worker.recognize(toCanvas(image));
     return { text: data.text.replace(/\s+/g, ' ').trim(), confidence: data.confidence / 100 };
   }
