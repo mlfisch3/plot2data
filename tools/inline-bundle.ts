@@ -44,9 +44,19 @@ html = html.replace(
 // end of the body or it executes before the elements it looks for exist.
 if (scripts.length > 0) {
   const block = scripts.map((code) => `<script>\n${code}\n</script>`).join('\n');
+  // A *function* replacement, because `String.replace` expands `$&`, `` $` ``
+  // and `$'` inside a string replacement - and a minified bundle is full of
+  // those sequences. One of them spliced the whole page into the middle of the
+  // script and the file:// build stopped parsing at all, silently, because
+  // nothing else in the build looks at what came out.
   html = html.includes('</body>')
-    ? html.replace('</body>', `${block}\n</body>`)
+    ? html.replace('</body>', () => `${block}\n</body>`)
     : `${html}\n${block}`;
+  for (const code of scripts) {
+    if (!html.includes(code)) {
+      throw new Error('the inlined script does not match the bundle it came from');
+    }
+  }
 }
 
 writeFileSync(indexPath, html);
