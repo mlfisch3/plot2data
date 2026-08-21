@@ -26,6 +26,7 @@ import {
   describeAxis,
   describeUncertainty,
   formatValue,
+  readLegendLabels,
   suggestPointCount,
   toCsv,
   toTable,
@@ -812,6 +813,45 @@ function finitePoints(s: DataSeries): number {
   );
 }
 
+/**
+ * Adopt or drop the names read off the chart, without touching a name the user
+ * has typed.
+ *
+ * Turning the toggle on after extracting with it off has nothing to adopt, so
+ * the legend is read now. That is one OCR pass over the labels rather than a
+ * second run of the whole analysis, and it cannot change a number: the same
+ * function runs, on the same image, and only names come back.
+ */
+async function applyReadNames(): Promise<void> {
+  const analysis = state.analysis;
+  if (!analysis) return;
+  if (state.readLabels !== 'off' && !state.readNames.some(Boolean) && state.cropped && ocr.available) {
+    state.busyMessage = 'Reading the legend…';
+    renderPanel();
+    try {
+      const labels = await readLegendLabels(
+        state.cropped,
+        analysis.frame,
+        analysis.series.map((s) => s.traced.colour),
+        ocr,
+        { dataMasks: analysis.series.map((s) => s.mask) },
+      );
+      for (const label of labels) state.readNames[label.index] = label.text;
+    } catch {
+      // A legend that will not read costs names and nothing else.
+    }
+  }
+  // Only names the user has not typed over are replaced, so turning this on and
+  // off never discards work.
+  state.names = state.names.map((current, i) =>
+    current === state.readNames[i] || current === `series_${i + 1}`
+      ? seriesName(state.readNames[i], i)
+      : current,
+  );
+  renderPanel();
+  refresh();
+}
+
 /** A legend name if one was read and adopted, otherwise the generic one. */
 function seriesName(read: string | undefined, index: number): string {
   if (state.readLabels === 'off') return `series_${index + 1}`;
@@ -1196,16 +1236,8 @@ function wirePanel(): void {
   const readLabelsBox = document.getElementById('read-labels') as HTMLInputElement | null;
   readLabelsBox?.addEventListener('change', () => {
     state.readLabels = readLabelsBox.checked ? 'auto' : 'off';
-    // Only names the user has not typed over are replaced, so turning this on
-    // and off never discards work.
-    state.names = state.names.map((current, i) =>
-      current === state.readNames[i] || current === `series_${i + 1}`
-        ? seriesName(state.readNames[i], i)
-        : current,
-    );
     scheduleSave();
-    renderPanel();
-    refresh();
+    void applyReadNames();
   });
 
   const list = document.getElementById('series-list');
