@@ -3,7 +3,7 @@
 Extract numerical data from an image of a plot, entirely in your browser.
 
 You have a screenshot of a line or scatter chart and you want the numbers back.
-Drop the image in, crop to one plot, check the four axis markers, read the result off three stacked panels, and download a CSV or an Excel workbook.
+Drop the image in, crop to one plot, check the four axis markers, read the result off the stacked panels and the table beneath them, and download a CSV or an Excel workbook.
 Nothing is uploaded: the whole pipeline, OCR included, runs on your machine and works offline.
 
 ![the workflow: load, crop, check the calibration, export](examples/real/01-multipanel-blue-ktrend.png)
@@ -20,6 +20,8 @@ It handles, and is tested on:
 - abbreviated tick labels (`42k`, `1.5M`, `3bn`), percentages, currencies, thousands separators and decimal commas
 - matplotlib-style `1e6` axis multiplier annotations, surfaced for confirmation rather than applied silently
 - multiple series separated by colour, solid and dashed lines, markers, and light and dark themes
+- strongly antialiased markers, where one series' fade into the paper passes through another series' colour
+- colour-coded legends, read with the same OCR and used as the series names
 - charts with no y-axis line, non-white backgrounds, faint or dotted gridlines, and JPEG compression
 - text printed *inside* the plot area in the same colour as the series it labels
 - densely spiked series, where a per-column centroid would shave a third off every peak
@@ -43,7 +45,7 @@ npm run android:apk # debug APK in android/app/build/outputs/apk/debug/
 
 `dist/index.html` is a single self-contained page: the script and stylesheet are inlined into it, so it runs from any static host
 *and* by opening it straight from the filesystem. Over `file://` the browser refuses to start a web worker, so OCR is skipped and the
-tool says so; you type the four marker values in and everything else - detection, tracing, the three panels, export - works exactly the same.
+tool says so; you type the four marker values in and everything else - detection, tracing, the panels, the table, export - works exactly the same.
 
 ## On a phone
 
@@ -72,8 +74,9 @@ npm run accuracy                # print the per-case accuracy table
    opens on the pixels beneath it. Nothing ever snaps to a tick: a marker goes exactly where you put it.
    The live mapping statement under them ("x: 0 to 12, linear") is what will be used; if it looks wrong, it is wrong.
    **Recalculate** re-runs everything, though everything already re-runs as you drag or type.
-5. **Read the three panels.** The original with the markers on it, the extracted numbers re-plotted as a chart, and the two overlaid.
-   Zoom and pan any of them; they share a zoom unless you turn that off. Untick a series to drop it from the re-plot, the overlay and the export at once.
+5. **Read the panels.** The original with the calibration markers on it, the extracted numbers re-plotted as a chart, the two overlaid,
+   and the numbers themselves in a table you can scroll and copy from.
+   Zoom and pan any of them; they share a zoom unless you turn that off. Untick a series to drop it from the re-plot, the overlay, the table and the export at once.
 6. **Export.** A CSV with the separator and header row you want, or a real `.xlsx` workbook.
 
 Anything the tool is unsure about appears as a warning in the panel and again in the export header: an ambiguous linear/log axis,
@@ -104,34 +107,76 @@ A wrong calibration is a silently wrong answer, so the design gives it no room t
 - Uncertainty comes from the drawn line's own thickness and the axis scale. A 3 px line over a 600 px axis spanning 0-100 is ±0.25 no matter how good the algorithm is; that number is shown in the UI and written into the export header.
   Thickness is measured perpendicular to the path - ink area over path length - not as the vertical extent of a column, which on a spiky series is several times the line's real width.
 
-### The three panels
+### The panels
 
 Checking an extraction means comparing it against the picture it came from, and the way people do that is to paste the numbers into a
 spreadsheet and draw a chart. That check is built in:
 
-1. **The original**, with the detected frame, ticks, traced path and the four calibration markers drawn over it.
+1. **The original**, with the detected frame, the detected ticks and the four calibration markers drawn over it - and nothing else.
+   The extraction is deliberately *not* drawn here. This is the one clean view of the source, and it is what everything below is compared
+   against; our own points drawn over the chart's own markers destroy the thing being compared to.
 2. **The extracted data, re-plotted** - not a picture of the trace over the image, but a chart drawn from the exported numbers, so what you
-   are looking at is what the file contains.
+   are looking at is what the file contains. Drag to pan, pinch or scroll to zoom, or press **Zoom to a box** and drag a rectangle to zoom
+   into a region. Hover or tap for a readout, and click a name in the legend to hide a series.
 3. **The overlay** - the extracted series drawn back over the original image. The two are aligned **through the calibration**, by mapping
    each value back to a pixel, never by stretching the image to fit. That is the point: it is the round trip that is being tested, so a
    wrong calibration shows up as a visible mismatch rather than being hidden by the fit. The image opacity and the point size are
    adjustable, and a magnifier tool redraws the trace at its own scale for a close look.
+4. **The numbers**, as a scrollable table you can select and copy from - the same table the export writes, so what is on screen and what
+   lands in the file cannot disagree.
 
 The overlay drawn this way is what found the peak clipping described below, so it earns its place.
 
+All three plot panels are drawn on **light paper whatever the system colour scheme is**. The series colours belong to the chart, chosen by
+whoever drew it against white paper; on a near-black panel a dark blue or a saturated red cannot be read at all, and the middle panel exists
+to be compared against the source by eye. The app chrome around them still follows the system setting.
+
+The chart panel is [Apache ECharts](https://echarts.apache.org/), tree-shaken to the pieces used. It was chosen on three constraints, in
+this order: it **bundles**, with no runtime network on desktop or on the phone; its **touch** handling is first class rather than mouse
+events with touch bolted on; and **region-select zoom** is built in. The reasoning, and what the alternatives cost, is recorded at the top of
+[`src/ui/chart.ts`](src/ui/chart.ts). The engine keeps no dependency at all - the library lives in the UI layer, and the purity test still
+passes.
+
+### How each series is drawn
+
+Every series is drawn to match what it came from, and every part of that is yours to change:
+
+- A **scatter** source draws as unconnected markers and a **curve** source draws as a line - and both show their markers by default,
+  because the points are what was actually extracted and hiding them behind a smooth line is how a bad extraction looks fine.
+- **Marker shape, marker size, line on or off, line width and colour** are settable per series, under "How it is read and drawn".
+
+### Series names from the chart
+
+Where a chart's legend is colour-coded, the labels are read with the same OCR that reads the tick labels and used as the series names.
+The label for the orange series is the text drawn in orange, wherever on the page it sits - inside the plot frame or outside it - which is
+what makes a colour-coded legend tractable. Legend entries that wrap over two rows are joined, and a name is only adopted where the
+entries line up into a column or a row: that alignment is what tells a legend entry from a chart title drawn in one of the same colours.
+
+**Naming is cosmetic and stays that way.** Nothing about it touches a coordinate, a calibration or an exported number; a bad read costs a
+name and falls back to `series_1`. Every name is editable, the toggle "Take names from legible labels on the chart" turns the whole thing
+off, and whatever name is showing is what goes into the file.
+
 ### Output sampling
 
-The exported rows are always **evenly spaced in x** - evenly in log x on a log axis, which is what evenly spaced means on the axis as
-drawn - and every curve series shares one grid, so the file is one table with one x column. A series that stops short leaves the cell
-blank rather than having a value extrapolated into it.
+**A marker series returns one point per drawn marker, at the position it was drawn.** No resampling, no shared grid, no automatic count:
+the markers are the answer, and the count is whatever was found. Those points keep their own x column in the file, because a marker's x is
+a measured position and not a slot on a grid.
 
-The **number of points is proposed, not demanded**. A drawn line chart is a polyline and its vertices are the real data points, so the
-tool counts the kinks in the trace and offers the count their spacing implies, with one line saying what it counted. Where no regular
-spacing can be read the proposal is one point per pixel column, which is uniform in x too and neither invents nor discards anything.
-Both the count and the mode are yours to overrule.
+**A curve series is different**, because there are no separate markers to find. The drawn line is traced and then sampled at evenly spaced
+x - evenly in log x on a log axis, which is what evenly spaced means on the axis as drawn - and every curve series shares one grid, so the
+file is one table with one x column. A series that stops short leaves the cell blank rather than having a value extrapolated into it.
+
+For a curve the **number of points is proposed, not demanded**. A drawn line chart is a polyline and its vertices are the real data points,
+so the tool counts the kinks in the trace and offers the count their spacing implies. Where no regular spacing can be read the proposal is
+one point per pixel column, which is uniform in x too and neither invents nor discards anything. Both the count and the mode are yours to
+overrule.
 
 It is an estimate and it says so. A line drawn wider than the spacing of its own data points hides some of its own vertices: on the
 retail-sales chart it proposes 235 points against a true 331. Across the real screenshots it lands within about a factor of two.
+
+A chart may hold both kinds at once, and then the file carries both: the curves under the shared x column, each marker series on its own
+pair of columns, and a header line naming the mode of every series. The Output panel explains, in sentences, which series is which, where
+the count came from, and what each of the other settings would give instead.
 
 ### Peaks
 
@@ -152,7 +197,9 @@ separately; see [ACCURACY.md](ACCURACY.md).
 - **Curve mode** traces the drawn path and resamples it onto the shared uniform grid. The CSV header says plainly that the rows are a
   resampling of a drawn curve, not the original data points.
 
-The mode is chosen from the shape of the ink - a marker is a compact filled blob, a dash is an elongated sliver - and can be overridden before extraction.
+The mode is chosen from the shape of the ink - a marker is a compact filled blob, a dash is an elongated sliver - and is **overridable per
+series**, in the series list, after extraction. Both readings are computed during the analysis, so switching costs a rebuild rather than a
+re-run. A chart carrying a scatter and a line at once is handled by setting each of them separately.
 
 ## The engine
 
@@ -165,6 +212,7 @@ import { analyse, buildSeries, toCsv, toXlsx } from './src/engine/index.ts';
 
 // `image` is { width, height, data: Uint8ClampedArray } in RGBA order.
 const analysis = await analyse(image, { ocr });      // ocr is optional
+// `modes` overrides the automatic curve/marker choice, per series.
 const series = buildSeries(analysis, { resample: { kind: 'uniform', count: 100 } });
 const csv = toCsv(analysis, series, { source: 'chart.png', delimiter: '\t' });
 ```
@@ -183,8 +231,10 @@ const csv = toCsv(analysis, series, { source: 'chart.png', delimiter: '\t' });
 | `pixelToValue(cal, px)` / `valueToPixel(cal, value)` | The mapping itself. |
 | `findSeriesCandidates(image, frame)` | Candidate series colours over the plot interior. |
 | `buildMask` / `findComponents` / `selectDataComponents` | Per-series coverage mask, its connected components, and the data-versus-text decision. |
-| `traceCurve(mask)` / `traceMarkers(components)` | Sub-pixel path tracing, apex-aware, and marker centres of mass. |
-| `suggestPointCount(analysis)` | Proposes an export point count from the vertex spacing in the trace. |
+| `traceCurve(mask)` / `traceMarkers(components)` | Sub-pixel path tracing, apex-aware, and marker centres of mass. Both are computed for every series, so the mode can be switched without re-analysing. |
+| `suggestPointCount(analysis, modes?)` | Proposes an export point count from the vertex spacing in the trace. Curves only: a marker series has no count to propose. |
+| `readLegendLabels(image, frame, colours, ocr)` | Series names read off a colour-coded legend, matched by colour. Cosmetic; never feeds a number. |
+| `findBlendArtefacts(candidates, masks, bg)` | Candidate colours that are another series' antialiased halo rather than a series. |
 | `toCsv` / `toXlsx` | Delimited text with the chosen separator, or a real `.xlsx` workbook, both with the calibration, uncertainty and warnings in the header. |
 | `estimateUncertainty(cal, thickness, strokeWidth)` | Uncertainty in data units from the line's thickness. |
 
@@ -203,8 +253,8 @@ Pass `null` and the tool still works fully by placing the four markers by hand.
 ## Layout
 
 ```
-src/engine/     the extraction engine, no DOM
-src/ui/         canvas stage, the three result panels, browser OCR, image IO
+src/engine/     the extraction engine, no DOM and no dependencies
+src/ui/         canvas stage, the result panels, the chart, browser OCR, image IO
 tools/          corpus generator, accuracy report, diagnostics
 test/           unit tests and the measured-accuracy suite
 corpus/         synthetic plots, ground-truth CSVs and case metadata
