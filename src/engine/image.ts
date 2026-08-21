@@ -145,6 +145,60 @@ export function dominantColour(img: ImageBuffer, rect?: Rect): RGB {
 }
 
 /**
+ * Where a pixel sits on the blend ray from a background to an ink colour.
+ *
+ * `t` is how far along that ray it lies - 0 is the background, 1 is the fully
+ * saturated ink, above 1 is *more* saturated than the ink - and `off` is how
+ * far it is from the ray, which is what separates a blend of this ink from a
+ * different colour entirely.
+ */
+export interface BlendFit {
+  t: number;
+  off: number;
+}
+
+export function blendFit(pixel: RGB, ink: RGB, bg: RGB): BlendFit {
+  const dr = ink.r - bg.r;
+  const dg = ink.g - bg.g;
+  const db = ink.b - bg.b;
+  const denom = dr * dr + dg * dg + db * db;
+  if (denom < 1e-6) return { t: 0, off: Infinity };
+  const t = ((pixel.r - bg.r) * dr + (pixel.g - bg.g) * dg + (pixel.b - bg.b) * db) / denom;
+  const rr = pixel.r - (bg.r + t * dr);
+  const rg = pixel.g - (bg.g + t * dg);
+  const rb = pixel.b - (bg.b + t * db);
+  return { t, off: Math.sqrt(rr * rr + rg * rg + rb * rb) };
+}
+
+/**
+ * Distance from a pixel to the blend *segment* between a background and an ink
+ * colour - the set of colours that ink can actually produce on that paper.
+ *
+ * This is the right way to ask "could this pixel be this series?", and it is
+ * not the same question as "which series' colour is it nearest". Desaturating
+ * a dark red towards white runs through a band of mid-tones that are, in plain
+ * RGB distance, closer to a saturated orange than to the red they came from -
+ * so a nearest-colour test hands every red marker's antialiased halo to an
+ * orange series drawn elsewhere on the chart. Measured against the segments,
+ * the same pixels sit 0.9 from red's and 47 from orange's, which is not a close
+ * call at all.
+ *
+ * Clamping to the segment rather than the infinite ray is what keeps a darker
+ * shade out of a lighter series of the same hue: a colour beyond the ink is not
+ * a blend of it, and pays the full distance to the ink itself.
+ */
+export function blendDistance(pixel: RGB, ink: RGB, bg: RGB): number {
+  const fit = blendFit(pixel, ink, bg);
+  if (!Number.isFinite(fit.off)) return Infinity;
+  const t = Math.max(0, Math.min(1, fit.t));
+  return Math.hypot(
+    pixel.r - (bg.r + t * (ink.r - bg.r)),
+    pixel.g - (bg.g + t * (ink.g - bg.g)),
+    pixel.b - (bg.b + t * (ink.b - bg.b)),
+  );
+}
+
+/**
  * Ink coverage of a pixel against a known background, 0..1.
  *
  * Antialiased chart pixels are a linear blend `p = alpha*ink + (1-alpha)*bg`.
@@ -152,20 +206,11 @@ export function dominantColour(img: ImageBuffer, rect?: Rect): RGB {
  * column centroid sub-pixel accurate instead of quantised to whole pixels.
  */
 export function inkAlpha(pixel: RGB, ink: RGB, bg: RGB): number {
-  const dr = ink.r - bg.r;
-  const dg = ink.g - bg.g;
-  const db = ink.b - bg.b;
-  const denom = dr * dr + dg * dg + db * db;
-  if (denom < 1e-6) return 0;
-  const alpha = ((pixel.r - bg.r) * dr + (pixel.g - bg.g) * dg + (pixel.b - bg.b) * db) / denom;
-  if (alpha <= 0) return 0;
-  if (alpha >= 1) return 1;
+  const { t, off } = blendFit(pixel, ink, bg);
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
   // Reject pixels that lie far off the bg->ink line (a different colour entirely).
-  const rr = pixel.r - (bg.r + alpha * dr);
-  const rg = pixel.g - (bg.g + alpha * dg);
-  const rb = pixel.b - (bg.b + alpha * db);
-  const off = Math.sqrt(rr * rr + rg * rg + rb * rb);
-  return off > 60 ? 0 : alpha;
+  return off > 60 ? 0 : t;
 }
 
 /** Generic "how far is this pixel from the background", 0..1. */

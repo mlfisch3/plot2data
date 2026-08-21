@@ -86,6 +86,13 @@ export const FUNCTIONS: Record<string, Fn> = {
   decay2: (x) => 12 * Math.pow(10, -x / 9),
   // Slow riser, used as a second series on linear axes.
   riser: (x) => 20 + 3.5 * x + 6 * Math.sin(x * 0.5),
+  // Four well-separated bands for the antialiasing-halo case. They never meet,
+  // so every marker stands alone and the point count is unambiguous - what is
+  // being tested there is colour, not merging.
+  band1: (x) => 84 + 5 * Math.sin(x * 0.8),
+  band2: (x) => 62 + 5 * Math.sin(x * 0.9 + 1),
+  band3: (x) => 40 + 5 * Math.sin(x * 0.7 + 2),
+  band4: (x) => 18 + 5 * Math.sin(x * 1.1 + 3),
   // Same shape as `sigmoid` but in the millions, to exercise a `1e6` axis
   // multiplier annotation: the axis is labelled 0..8 with `1e6` in the corner.
   megasigmoid: (x) => 1e6 * (0.4 + 7.2 / (1 + Math.exp(-(x - 6) / 1.2))),
@@ -286,6 +293,49 @@ export const CASES: CaseSpec[] = [
     scatter: true,
     pointRadius: 5,
     series: [{ label: 'damped', colour: OKABE.blue, fn: 'damped' }],
+  },
+  {
+    /**
+     * Antialiasing halos must never be promoted to a series.
+     *
+     * Every marker here is drawn with a hard edge against white paper, so each
+     * one is ringed by a one-pixel band of intermediate colours. Two of the
+     * four colours are chosen to make that band dangerous:
+     *
+     * - `#ba0000` against white passes through mid-tones that are *nearer* the
+     *   saturated `#cc6600` than the red they came from, in plain RGB distance.
+     *   That is the microprocessor chart's defect exactly: read by nearest
+     *   colour, every red marker donates a ring of specks to the orange series,
+     *   which then measures one pixel thick and swamps the real orange markers.
+     * - `#0000ba` and `#008700` are dark enough that their own edges run through
+     *   the same mid-tone band, so all four series cast halos at once and the
+     *   ink has to be attributed to four hosts rather than one.
+     *
+     * A tint of another series' colour - `#6666cc` beside `#0000ba`, say - is
+     * deliberately *not* here: that is genuinely inseparable from an antialiased
+     * edge by colour, and is recorded as a known limit rather than tested as if
+     * it were solved.
+     */
+    id: 'scatter-halo-colours',
+    description: 'Four antialiased marker series, two colours chosen to be mistaken for halos',
+    width: 900,
+    height: 560,
+    grid: true,
+    xScale: 'linear',
+    yScale: 'linear',
+    xMin: 0,
+    xMax: 12,
+    yMin: 0,
+    yMax: 100,
+    samples: 22,
+    scatter: true,
+    pointRadius: 6,
+    series: [
+      { label: 'red', colour: '#ba0000', fn: 'band1' },
+      { label: 'orange', colour: '#cc6600', fn: 'band2' },
+      { label: 'blue', colour: '#0000ba', fn: 'band3' },
+      { label: 'green', colour: '#008700', fn: 'band4' },
+    ],
   },
   {
     id: 'jpeg-compressed',

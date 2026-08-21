@@ -1,0 +1,40 @@
+{
+  "id": "scatter-halo-colours",
+  "description": "Four antialiased marker series, two colours chosen to be mistaken for halos",
+  "width": 900,
+  "height": 560,
+  "grid": true,
+  "xScale": "linear",
+  "yScale": "linear",
+  "xMin": 0,
+  "xMax": 12,
+  "yMin": 0,
+  "yMax": 100,
+  "samples": 22,
+  "scatter": true,
+  "pointRadius": 6,
+  "series": [
+    {
+      "label": "red",
+      "colour": "#ba0000",
+      "fn": "band1"
+    },
+    {
+      "label": "orange",
+      "colour": "#cc6600",
+      "fn": "band2"
+    },
+    {
+      "label": "blue",
+      "colour": "#0000ba",
+      "fn": "band3"
+    },
+    {
+      "label": "green",
+      "colour": "#008700",
+      "fn": "band4"
+    }
+  ],
+  "image": "scatter-halo-colours.png",
+  "truth": "scatter-halo-colours.csv"
+}

@@ -57,12 +57,14 @@ export {
 export {
   buildMask,
   detectGridlines,
+  findBlendArtefacts,
   findComponents,
   findSeriesCandidates,
   maskOfComponents,
   selectDataComponents,
   DEFAULT_SEGMENT_OPTIONS,
   clampInterior,
+  type BlendArtefact,
   type Component,
   type GridInfo,
   type SegmentOptions,
@@ -90,6 +92,7 @@ export {
   buildSeries,
   sharedSpan,
   suggestPointCount,
+  tracedAs,
   type AnalyseOptions,
   type Analysis,
   type AnalysedSeries,
@@ -112,6 +115,8 @@ export {
 } from './csv.ts';
 export { writeXlsx, columnName, type Cell, type Sheet } from './xlsx.ts';
 export {
+  blendDistance,
+  blendFit,
   colourDistance,
   createImage,
   cropImage,
@@ -124,4 +129,5 @@ export {
   saturation,
   scaleImage,
   setPixel,
+  type BlendFit,
 } from './image.ts';

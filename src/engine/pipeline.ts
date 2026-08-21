@@ -14,10 +14,12 @@ import {
   buildMask,
   clampInterior,
   detectGridlines,
+  findBlendArtefacts,
   findComponents,
   findSeriesCandidates,
   maskOfComponents,
   selectDataComponents,
+  type Component,
   type SegmentOptions,
   type SeriesMask,
 } from './segment.ts';
@@ -46,6 +48,7 @@ export type WarningCode =
   | 'offset-annotation'
   | 'no-ocr'
   | 'no-series'
+  | 'halo-rejected'
   | 'markers-merged';
 
 export interface Warning {
@@ -68,11 +71,27 @@ export interface AnalyseOptions {
 }
 
 export interface AnalysedSeries {
+  /** The reading for the mode currently in force. */
   traced: TracedSeries;
+  /** The mode chosen from the shape of the ink, before any override. */
+  autoMode: ExtractionMode;
+  /** The same ink read as a drawn path. */
+  curve: TracedSeries;
+  /** The same ink read as discrete markers, one point per blob. */
+  marker: TracedSeries;
   /** The mask the trace came from, kept so the UI can draw an overlay. */
   mask: SeriesMask;
+  /** The components the trace was built from, in mask-local coordinates. */
+  components: Component[];
+  /** The colour cluster this series came from. */
+  candidate: SeriesCandidate;
   /** Number of components discarded as in-plot text or stray marks. */
   rejectedComponents: number;
+}
+
+/** The reading of one analysed series under a given mode. */
+export function tracedAs(series: AnalysedSeries, mode: ExtractionMode): TracedSeries {
+  return mode === 'marker' ? series.marker : series.curve;
 }
 
 export interface Analysis {
@@ -212,52 +231,79 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
     });
   }
 
-  const candidates = findSeriesCandidates(img, frame, options.segment, grid).slice(
+  let candidates = findSeriesCandidates(img, frame, options.segment, grid).slice(
     0,
     options.maxSeries ?? 6,
   );
-  const colours = candidates.map((c) => c.colour);
-  const series: AnalysedSeries[] = [];
+  const maskFor = (list: SeriesCandidate[]) => {
+    const colours = list.map((c) => c.colour);
+    return list.map((c) => buildMask(img, frame, c.colour, colours, options.segment, grid));
+  };
+  let masks = maskFor(candidates);
 
-  for (const candidate of candidates) {
-    const full = buildMask(img, frame, candidate.colour, colours, options.segment, grid);
+  // A halo is not a series. Drop any candidate that turns out to be the
+  // antialiased edge of another, then rebuild the surviving masks without it,
+  // so the ink it was holding goes back to the series it belongs to.
+  const artefacts = findBlendArtefacts(candidates, masks, frame.background);
+  if (artefacts.length > 0) {
+    const dropped = new Set(artefacts.map((a) => a.index));
+    for (const a of artefacts) {
+      warnings.push({
+        code: 'halo-rejected',
+        level: 'info',
+        message:
+          `A colour found over ${Math.round(a.wrapShare * 100)}% of the ink of another series was ` +
+          'rejected as its antialiased edge rather than reported as a series of its own.',
+      });
+    }
+    candidates = candidates.filter((_, i) => !dropped.has(i));
+    masks = maskFor(candidates);
+  }
+
+  const series: AnalysedSeries[] = [];
+  candidates.forEach((candidate, index) => {
+    const full = masks[index];
     const components = findComponents(full);
-    if (components.length === 0) continue;
+    if (components.length === 0) return;
     const selection = selectDataComponents(components, full);
-    if (selection.kept.length === 0) continue;
+    if (selection.kept.length === 0) return;
     const mask = maskOfComponents(full, selection.kept);
 
-    const wantMarkers = options.mode ? options.mode === 'marker' : selection.markerLike;
-    if (wantMarkers) {
-      const m = traceMarkers(selection.kept);
-      series.push({
-        traced: {
-          colour: candidate.colour,
-          mode: 'marker',
-          points: m.points,
-          thicknessPx: m.heightPx,
-          markerWidthPx: m.markerWidthPx,
-        },
-        mask,
-        rejectedComponents: selection.rejected.length,
-      });
-      continue;
-    }
-
+    // Both readings are computed and kept. Which one is right is a judgement
+    // about the ink, and the user is entitled to disagree with it - per series,
+    // on a chart that may well carry one of each - without paying for the whole
+    // analysis a second time.
+    const m = traceMarkers(selection.kept);
+    const marker: TracedSeries = {
+      colour: candidate.colour,
+      mode: 'marker',
+      points: m.points,
+      thicknessPx: m.heightPx,
+      markerWidthPx: m.markerWidthPx,
+    };
     const t = traceCurve(mask, options.trace);
-    if (t.points.length < 2) continue;
+    const curve: TracedSeries = {
+      colour: candidate.colour,
+      mode: 'curve',
+      points: t.points,
+      thicknessPx: t.thicknessPx,
+      markerWidthPx: 0,
+    };
+
+    const autoMode: ExtractionMode = selection.markerLike ? 'marker' : 'curve';
+    const mode = options.mode ?? autoMode;
+    if (mode === 'curve' && curve.points.length < 2) return;
     series.push({
-      traced: {
-        colour: candidate.colour,
-        mode: 'curve',
-        points: t.points,
-        thicknessPx: t.thicknessPx,
-        markerWidthPx: 0,
-      },
+      traced: mode === 'marker' ? marker : curve,
+      autoMode,
+      curve,
+      marker,
       mask,
+      components: selection.kept,
+      candidate,
       rejectedComponents: selection.rejected.length,
     });
-  }
+  });
 
   if (series.length === 0) {
     warnings.push({

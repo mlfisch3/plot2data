@@ -50,6 +50,11 @@
     "description": "Scatter plot with discrete circular markers - marker mode"
   },
   {
+    "id": "scatter-halo-colours",
+    "image": "scatter-halo-colours.png",
+    "description": "Four antialiased marker series, two colours chosen to be mistaken for halos"
+  },
+  {
     "id": "jpeg-compressed",
     "image": "jpeg-compressed.jpg",
     "description": "JPEG at quality 80 - tests robustness to compression artefacts"

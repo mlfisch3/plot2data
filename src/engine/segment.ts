@@ -9,7 +9,7 @@
  * large fraction of the plot width, a word does not.
  */
 
-import { colourDistance, getPixel, inkAlpha, isGray, luma } from './image.ts';
+import { blendDistance, blendFit, colourDistance, getPixel, inkAlpha, isGray, luma } from './image.ts';
 import { insetRect } from './frame.ts';
 import type { ImageBuffer, PlotFrame, Rect, RGB, SeriesCandidate } from './types.ts';
 
@@ -426,22 +426,132 @@ export function buildMask(
         colourDistance(px, bg) <= grid.faintLimit) {
         continue;
       }
-      // A pixel closer to another series' colour belongs to that series.
-      const dOwn = colourDistance(px, colour);
+      // Which series could have drawn this pixel? Measured against each
+      // series' *blend segment* - the colours that ink can produce on this
+      // paper - not against its saturated colour. An antialiased pixel is by
+      // construction a point on its own series' segment, and comparing
+      // saturated colours instead is what put every red marker's halo into the
+      // orange series on the microprocessor chart; see `blendDistance`.
+      const dOwn = blendDistance(px, colour, bg);
       let claimed = false;
       for (const r of rivals) {
-        if (colourDistance(px, r) < dOwn) {
+        if (blendDistance(px, r, bg) < dOwn) {
           claimed = true;
           break;
         }
       }
       if (claimed) continue;
+      // The gridline is the one rival that must still be judged on its solid
+      // colour. A grey grid on white paper lies *exactly* on the blend segment
+      // of any black series, so the segment test cannot separate the two and
+      // would hand every grid dot to the darkest series on the chart.
       if (grid.colour && colourDistance(px, grid.colour) < colourDistance(px, colour)) continue;
       const a = inkAlpha(px, colour, bg);
       if (a > 0.05) alpha[y * width + x] = a;
     }
   }
   return { colour, rect, alpha, width, height };
+}
+
+/** One candidate series found to be an artefact of another, not a series. */
+export interface BlendArtefact {
+  /** Index of the candidate being rejected. */
+  index: number;
+  /** Index of the series it is an artefact of. */
+  hostIndex: number;
+  /** Fraction of its ink that sits against the host's ink, 0..1. */
+  wrapShare: number;
+}
+
+/**
+ * How closely `colour` sits on the blend segment between `host` and `bg`, as a
+ * fraction of the host's own distance from the background. Relative, because an
+ * absolute tolerance in colour units means one thing for a near-white series
+ * and something else entirely for a saturated one.
+ */
+const HALO_OFF_SHARE = 0.08;
+/** Fraction of a halo's ink that has to sit against its host's ink. */
+const HALO_WRAP_SHARE = 0.7;
+/** How far a halo pixel may sit from the ink it wraps. */
+const HALO_REACH = 2;
+
+/**
+ * Candidate "series" that are really blend artefacts of another series.
+ *
+ * Antialiasing a marker against the paper produces a one-pixel band of
+ * intermediate colours all the way around every marker. Where that band is
+ * close enough in colour to be clustered on its own, it has every superficial
+ * property of a series - thousands of pixels, spread across the plot, a colour
+ * of its own - and none of the real ones: its ink is a *blend* of another
+ * series' colour with the background, and it is wrapped around that series'
+ * ink rather than lying anywhere of its own.
+ *
+ * Both tests have to pass, and both have a wide margin. On the microprocessor
+ * chart the halo of the red markers sits 0.9 colour units off red's blend
+ * segment and wraps it completely, while the genuine orange series sits 72
+ * units off and touches red nowhere - so this rejects the first and cannot
+ * touch the second.
+ */
+export function findBlendArtefacts(
+  candidates: SeriesCandidate[],
+  masks: SeriesMask[],
+  bg: RGB,
+  threshold = 0.3,
+): BlendArtefact[] {
+  const out: BlendArtefact[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const colour = candidates[i].colour;
+    for (let j = 0; j < candidates.length; j++) {
+      if (i === j) continue;
+      // Only a stronger series can cast a halo: the artefact is always the
+      // smaller of the pair, being one pixel of edge against a filled shape.
+      if (candidates[j].pixelCount <= candidates[i].pixelCount) continue;
+      const host = candidates[j].colour;
+      const fit = blendFit(colour, host, bg);
+      const span = colourDistance(host, bg);
+      if (!(fit.t > 0.1 && fit.t < 0.95)) continue;
+      if (!(fit.off <= span * HALO_OFF_SHARE)) continue;
+      const wrapShare = adjacentInkShare(masks[i], masks[j], threshold, HALO_REACH);
+      if (wrapShare >= HALO_WRAP_SHARE) {
+        out.push({ index: i, hostIndex: j, wrapShare });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Fraction of `mask`'s ink that lies within `reach` pixels of `other`'s ink. */
+function adjacentInkShare(
+  mask: SeriesMask,
+  other: SeriesMask,
+  threshold: number,
+  reach: number,
+): number {
+  if (mask.width !== other.width || mask.height !== other.height) return 0;
+  let total = 0;
+  let near = 0;
+  for (let y = 0; y < mask.height; y++) {
+    for (let x = 0; x < mask.width; x++) {
+      if (mask.alpha[y * mask.width + x] < threshold) continue;
+      total++;
+      let found = false;
+      for (let dy = -reach; dy <= reach && !found; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= mask.height) continue;
+        for (let dx = -reach; dx <= reach; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= mask.width) continue;
+          if (other.alpha[ny * mask.width + nx] >= threshold) {
+            found = true;
+            break;
+          }
+        }
+      }
+      if (found) near++;
+    }
+  }
+  return total === 0 ? 0 : near / total;
 }
 
 /** 8-connected components of a mask above `threshold`. */
@@ -588,8 +698,19 @@ export function selectDataComponents(
 
   if (markerLike) {
     // Keep blobs of a consistent size: the outliers are specks and glyphs.
+    //
+    // The median sets the scale, floored by the size of the component holding
+    // the median *unit of ink*. A plain median is only as good as the
+    // population it is taken over, and a cloud of sub-pixel dust can outnumber
+    // the markers it settles on - which is exactly what happened when every red
+    // marker's halo was mistaken for an orange series: 123 one-pixel specks
+    // dragged the median to 0.79 px and the keep window then admitted the dust
+    // and threw away all 54 real markers. Dust carries no ink, so it cannot
+    // move the ink-weighted figure, and the floor holds.
+    const inkTypical = weightedMedian(areas, areas);
+    const floor = Math.max(medianArea * 0.2, inkTypical * 0.05);
     const kept = metrics
-      .filter((m) => m.c.area >= medianArea * 0.2 && m.c.area <= medianArea * 8)
+      .filter((m) => m.c.area >= floor && m.c.area <= medianArea * 8)
       .map((m) => m.c);
     return { kept, rejected: components.filter((c) => !kept.includes(c)), markerLike: true };
   }
