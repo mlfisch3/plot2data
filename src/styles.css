@@ -241,16 +241,19 @@ body {
 /* ---------- canvas ---------- */
 
 .stage {
-  background: var(--panel-mat);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow);
 }
 
+/* The image sits on the light mat like the other two panels; the header and
+   the button bar around it are app chrome and follow the system scheme. */
 .stage canvas {
   display: block;
   width: 100%;
+  background: var(--panel-mat);
   touch-action: none;
 }
 
@@ -592,6 +595,7 @@ label {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   min-height: var(--tap);
   padding: 4px 0;
   border-bottom: 1px solid var(--border);
@@ -622,6 +626,135 @@ label {
   font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
+}
+
+/* Per-series drawing and reading options, folded away until wanted. */
+.series-more {
+  flex-basis: 100%;
+}
+
+.series-more summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+
+.series-more summary::-webkit-details-marker {
+  display: none;
+}
+
+/* An explicit disclosure triangle: the row is laid out with flex, which drops
+   the UA marker, and without one the summary reads as a stray caption. */
+.series-more summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border: 4px solid transparent;
+  border-left-color: currentColor;
+  transition: transform 0.12s ease;
+}
+
+.series-more[open] summary::before {
+  transform: rotate(90deg) translateX(1px);
+}
+
+.series-options {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 4px 0 10px;
+}
+
+.series-options label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.series-options select,
+.series-options input[type='color'] {
+  min-height: 34px;
+  width: 100%;
+}
+
+.series-options input[type='color'] {
+  padding: 2px;
+}
+
+/* The chart panel hosts a charting library rather than a canvas of our own. */
+.chart-host {
+  width: 100%;
+  height: clamp(220px, 42vw, 400px);
+  background: var(--panel-paper);
+}
+
+/* ---------- data table ---------- */
+
+.data-table {
+  max-height: 340px;
+  overflow: auto;
+  background: var(--panel-paper);
+  color: #1a2029;
+  /* A table is for reading numbers off and copying them, so it is selectable
+     even where the rest of the page is not, and it scrolls in both directions
+     rather than forcing the page to. */
+  -webkit-user-select: text;
+  user-select: text;
+  overscroll-behavior: contain;
+}
+
+.data-table table {
+  border-collapse: collapse;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 100%;
+}
+
+.data-table th,
+.data-table td {
+  padding: 4px 10px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid #e7eaef;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f2f4f8;
+  color: #333b47;
+  font-weight: 650;
+  text-align: right;
+}
+
+.data-table tbody tr:nth-child(even) {
+  background: #fafbfd;
+}
+
+.data-table p.status {
+  padding: 12px;
+}
+
+/* The output panel's explanation: prose, not a parameter dump. */
+.explain {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.explain p {
+  margin: 0 0 8px;
+}
+
+.explain p:last-child {
+  margin-bottom: 0;
 }
 
 /* Numbered walkthrough on the empty state. */

@@ -18,18 +18,69 @@ import { valueToPixel } from '../engine/calibration.ts';
 import type { Calibration, DataSeries } from '../engine/types.ts';
 import { Viewport, type WorldRect } from './viewport.ts';
 import { drawMagnifier } from './magnifier.ts';
-import { cssColour } from './stage.ts';
+import type { MarkerShape, SeriesStyle } from './chart.ts';
 
 export interface OverlayData {
   bitmap: ImageBitmap;
   series: DataSeries[];
+  /** One style per entry of `series`, in the same order. */
+  styles: SeriesStyle[];
   calibration: Calibration;
   /** Opacity of the underlying image, 0..1. */
   imageOpacity: number;
-  /** Point marker radius in CSS pixels. */
-  pointRadius: number;
+  /** Scales every series' own marker size; the slider under the panel. */
+  pointScale: number;
   /** Show the magnifier under the pointer. */
   magnify: boolean;
+}
+
+/**
+ * Draw one marker.
+ *
+ * The overlay's markers are deliberately hollow, with a light fill and the
+ * series colour as the outline: the point of this panel is to see whether the
+ * extracted point lands on the ink underneath it, and a solid marker hides the
+ * very thing being checked.
+ */
+function markerPath(
+  ctx: CanvasRenderingContext2D,
+  shape: MarkerShape,
+  x: number,
+  y: number,
+  r: number,
+): void {
+  ctx.beginPath();
+  switch (shape) {
+    case 'rect':
+    case 'roundRect':
+      ctx.rect(x - r, y - r, r * 2, r * 2);
+      break;
+    case 'triangle':
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y + r);
+      ctx.lineTo(x - r, y + r);
+      ctx.closePath();
+      break;
+    case 'diamond':
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y);
+      ctx.lineTo(x, y + r);
+      ctx.lineTo(x - r, y);
+      ctx.closePath();
+      break;
+    case 'arrow':
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r, y + r);
+      ctx.lineTo(x, y + r * 0.4);
+      ctx.lineTo(x - r, y + r);
+      ctx.closePath();
+      break;
+    case 'pin':
+      ctx.arc(x, y - r * 0.3, r * 0.8, 0, Math.PI * 2);
+      break;
+    default:
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+  }
 }
 
 export class OverlayPanel {
@@ -85,7 +136,9 @@ export class OverlayPanel {
     ctx.drawImage(data.bitmap, v.dx, v.dy, data.bitmap.width * v.scale, data.bitmap.height * v.scale);
     ctx.globalAlpha = 1;
 
-    for (const series of data.series) {
+    data.series.forEach((series, index) => {
+      const style = data.styles[index];
+      if (!style) return;
       const points = series.points
         .map((p) => {
           if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
@@ -96,10 +149,9 @@ export class OverlayPanel {
           return Number.isFinite(s.x) && Number.isFinite(s.y) ? s : null;
         })
         .filter((p): p is { x: number; y: number } => p !== null);
-      if (points.length === 0) continue;
+      if (points.length === 0) return;
 
-      const stroke = cssColour(series.colour);
-      if (series.mode === 'curve') {
+      if (style.line) {
         // A dark halo under a light dashed line reads against ink of any colour,
         // and neither of them looks like the drawn series.
         const path = () => {
@@ -109,26 +161,26 @@ export class OverlayPanel {
         };
         ctx.lineJoin = 'round';
         ctx.strokeStyle = 'rgba(16,20,28,0.55)';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = style.lineWidth + 1.6;
         path();
         ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = style.lineWidth;
         ctx.setLineDash([5, 4]);
         path();
         ctx.setLineDash([]);
       }
-      if (data.pointRadius > 0) {
+      const radius = (style.size / 2) * data.pointScale;
+      if (style.shape !== 'none' && radius > 0.2) {
         for (const p of points) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, data.pointRadius, 0, Math.PI * 2);
+          markerPath(ctx, style.shape, p.x, p.y, radius);
           ctx.fillStyle = 'rgba(255,255,255,0.92)';
           ctx.fill();
           ctx.lineWidth = 1;
-          ctx.strokeStyle = stroke;
+          ctx.strokeStyle = style.colour;
           ctx.stroke();
         }
       }
-    }
+    });
     ctx.restore();
 
     if (data.magnify && this.probe) {
@@ -153,7 +205,9 @@ export class OverlayPanel {
   ): void {
     const data = this.data;
     if (!data) return;
-    for (const series of data.series) {
+    data.series.forEach((series, index) => {
+      const style = data.styles[index];
+      if (!style) return;
       const points = series.points
         .map((p) => {
           if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
@@ -163,26 +217,29 @@ export class OverlayPanel {
           );
         })
         .filter((p): p is { x: number; y: number } => p !== null);
-      if (points.length === 0) continue;
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(16,20,28,0.6)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = cssColour(series.colour);
+      if (points.length === 0) return;
+      if (style.line) {
+        const path = () => {
+          ctx.beginPath();
+          points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+          ctx.stroke();
+        };
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'rgba(16,20,28,0.6)';
+        ctx.lineWidth = 3;
+        path();
+        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([5, 4]);
+        path();
+        ctx.setLineDash([]);
+      }
+      if (style.shape === 'none') return;
+      ctx.fillStyle = style.colour;
       for (const p of points) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+        markerPath(ctx, style.shape, p.x, p.y, 2.5);
         ctx.fill();
       }
-    }
+    });
   }
 }

@@ -28,6 +28,7 @@ import {
   formatValue,
   suggestPointCount,
   toCsv,
+  toTable,
   toXlsx,
   DELIMITERS,
   type Analysis,
@@ -35,6 +36,7 @@ import {
   type Calibration,
   type DataSeries,
   type DelimiterName,
+  type ExtractionMode,
   type ImageBuffer,
   type Rect,
   type SamplingSuggestion,
@@ -43,7 +45,7 @@ import { calibrateAxis } from './engine/calibration.ts';
 import { BrowserOcr } from './ui/ocr.ts';
 import { ACCEPT_ATTRIBUTE, cropBuffer, fileFromTransfer, loadImageFile } from './ui/image-io.ts';
 import { Stage, cssColour, type AnchorId } from './ui/stage.ts';
-import { ReplotChart } from './ui/chart.ts';
+import { defaultStyle, MARKER_SHAPES, ReplotChart, type SeriesStyle } from './ui/chart.ts';
 import { OverlayPanel } from './ui/overlay.ts';
 import type { WorldRect } from './ui/viewport.ts';
 import {
@@ -71,11 +73,19 @@ interface State {
   calibration: Calibration | null;
   visible: Set<number>;
   names: string[];
+  /** The name the chart's own legend gave each series, where it gave one. */
+  readNames: string[];
+  /** How each series is drawn, in the chart panel and in the overlay. */
+  styles: SeriesStyle[];
+  /** Per-series curve/marker choice; `auto` follows the shape of the ink. */
+  modes: Array<'auto' | 'curve' | 'marker'>;
   /** `auto` follows the suggestion; the other two are the user's own choice. */
   sampling: 'auto' | 'uniform' | 'native';
   count: number;
   suggestion: SamplingSuggestion | null;
   modeOverride: 'auto' | 'curve' | 'marker';
+  /** Read series names off the chart's legend. */
+  readLabels: 'auto' | 'on' | 'off';
   delimiter: DelimiterName;
   withHeader: boolean;
   imageOpacity: number;
@@ -102,14 +112,18 @@ const state: State = {
   calibration: null,
   visible: new Set(),
   names: [],
+  readNames: [],
+  styles: [],
+  modes: [],
   sampling: 'auto',
   count: 100,
   suggestion: null,
   modeOverride: 'auto',
+  readLabels: 'auto',
   delimiter: 'comma',
   withHeader: true,
   imageOpacity: 0.45,
-  pointRadius: 1.5,
+  pointRadius: 1,
   magnify: false,
   linkZoom: true,
   busyMessage: '',
@@ -153,10 +167,11 @@ app.innerHTML = `
           <h2>Extracted data</h2>
           <span class="panel-note" id="replot-note"></span>
         </header>
-        <div class="panel-canvas"><canvas id="replot" aria-label="The extracted data re-plotted"></canvas></div>
+        <div class="chart-host" id="replot" role="img" aria-label="The extracted data re-plotted"></div>
         <div class="panel-tools">
           <label class="check-row"><input type="checkbox" id="link-zoom" checked /> Share zoom across panels</label>
-          <button id="replot-fit">Fit</button>
+          <span class="panel-note">Drag to pan, pinch or scroll to zoom, or pick the box tool to zoom into a region.</span>
+          <button id="replot-fit">Reset zoom</button>
         </div>
       </section>
 
@@ -170,12 +185,21 @@ app.innerHTML = `
           <label for="opacity">Image</label>
           <input type="range" id="opacity" min="0" max="100" step="5" value="45"
             aria-label="Original image opacity" />
-          <label for="point-size">Points</label>
-          <input type="range" id="point-size" min="0" max="6" step="0.5" value="1.5"
+          <label for="point-size">Point size</label>
+          <input type="range" id="point-size" min="0" max="2.5" step="0.1" value="1"
             aria-label="Point marker size" />
           <label class="check-row"><input type="checkbox" id="magnify" /> Magnifier</label>
           <button id="overlay-fit">Fit</button>
         </div>
+      </section>
+
+      <section class="panel-block" id="table-block" hidden>
+        <header class="panel-head">
+          <h2>Extracted numbers</h2>
+          <span class="panel-note" id="table-note"></span>
+        </header>
+        <div class="data-table" id="data-table" tabindex="0"
+          aria-label="The extracted numbers as a table"></div>
       </section>
     </div>
     <div id="panel"></div>
@@ -194,7 +218,10 @@ const zoomer = document.getElementById('zoomer') as HTMLSpanElement;
 const stageHead = document.getElementById('stage-head') as HTMLElement;
 const replotBlock = document.getElementById('replot-block') as HTMLElement;
 const overlayBlock = document.getElementById('overlay-block') as HTMLElement;
+const tableBlock = document.getElementById('table-block') as HTMLElement;
 const replotNote = document.getElementById('replot-note')!;
+const tableNote = document.getElementById('table-note')!;
+const tableHost = document.getElementById('data-table')!;
 
 const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement, {
   onCropChange(rect) {
@@ -212,9 +239,9 @@ const stage = new Stage(document.getElementById('stage') as HTMLCanvasElement, {
 });
 
 const chart = new ReplotChart(
-  document.getElementById('replot') as HTMLCanvasElement,
+  document.getElementById('replot') as HTMLDivElement,
   () => chartTheme(),
-  (v) => mirrorZoom(() => v.visibleWindow(), 'chart'),
+  (window_) => mirrorZoom(() => window_, 'chart'),
 );
 const overlay = new OverlayPanel(document.getElementById('overlay') as HTMLCanvasElement, (v) =>
   mirrorZoom(() => v.visibleWindow(), 'overlay'),
@@ -228,12 +255,13 @@ const overlay = new OverlayPanel(document.getElementById('overlay') as HTMLCanva
  */
 let mirroring = false;
 
-function mirrorZoom(window_: () => WorldRect, from: 'stage' | 'chart' | 'overlay'): void {
+function mirrorZoom(window_: () => WorldRect | null, from: 'stage' | 'chart' | 'overlay'): void {
   if (mirroring || !state.linkZoom || state.phase !== 'ready') return;
-  mirroring = true;
   const w = window_();
+  if (!w || !Number.isFinite(w.x0 + w.x1 + w.y0 + w.y1)) return;
+  mirroring = true;
   if (from !== 'stage') stage.showWindow(w);
-  if (from !== 'chart') chart.viewport.showWindow(w);
+  if (from !== 'chart') chart.showWindow(w);
   if (from !== 'overlay') overlay.viewport.showWindow(w);
   mirroring = false;
 }
@@ -357,6 +385,7 @@ interface SavedSession {
   token: string;
   crop: Rect;
   modeOverride: State['modeOverride'];
+  readLabels: State['readLabels'];
   sampling: State['sampling'];
   count: number;
   delimiter: DelimiterName;
@@ -376,6 +405,7 @@ function saveSession(): void {
     token: state.token,
     crop: state.crop,
     modeOverride: state.modeOverride,
+    readLabels: state.readLabels,
     sampling: state.sampling,
     count: state.count,
     delimiter: state.delimiter,
@@ -499,6 +529,7 @@ async function accept(file: File, incoming?: IncomingImage): Promise<void> {
     state.crop = clampCrop(restored?.crop, loaded.buffer);
     if (restored) {
       state.modeOverride = restored.modeOverride;
+      state.readLabels = restored.readLabels ?? 'auto';
       state.sampling = restored.sampling ?? 'auto';
       state.count = restored.count;
       state.delimiter = restored.delimiter ?? 'comma';
@@ -599,7 +630,10 @@ document.getElementById('zoom-out')!.addEventListener('click', () => {
   stage.zoomStep(1 / 1.6);
   mirrorZoom(() => stage.visibleWindow(), 'stage');
 });
-document.getElementById('replot-fit')!.addEventListener('click', () => chart.viewport.resetView());
+document.getElementById('replot-fit')!.addEventListener('click', () => {
+  chart.resetView();
+  mirrorZoom(() => chart.visibleWindow(), 'chart');
+});
 document.getElementById('overlay-fit')!.addEventListener('click', () => overlay.viewport.resetView());
 
 const linkBox = document.getElementById('link-zoom') as HTMLInputElement;
@@ -646,12 +680,16 @@ async function runExtraction(): Promise<void> {
     const analysis = await analyse(cropped, {
       ocr: ocr.available ? ocr : null,
       mode: state.modeOverride === 'auto' ? undefined : state.modeOverride,
+      readLabels: state.readLabels !== 'off',
     });
     state.analysis = analysis;
     state.calibration = analysis.calibration;
     state.visible = new Set(analysis.series.map((_, i) => i));
-    state.names = analysis.series.map((_, i) => `series_${i + 1}`);
-    state.suggestion = suggestPointCount(analysis);
+    state.readNames = analysis.series.map((s) => s.label?.text ?? '');
+    state.names = analysis.series.map((s, i) => seriesName(s.label?.text, i));
+    state.modes = analysis.series.map(() => 'auto');
+    state.styles = [];
+    state.suggestion = suggestPointCount(analysis, currentModes());
     if (state.sampling === 'auto') state.count = state.suggestion.count;
     state.phase = 'ready';
     pushStep('ready');
@@ -737,15 +775,40 @@ function setAnnotation(axis: 'x' | 'y', enabled: boolean): void {
  */
 function recalculate(): void {
   if (!state.analysis) return;
-  state.suggestion = suggestPointCount(state.analysis);
+  state.suggestion = suggestPointCount(state.analysis, currentModes());
   if (state.sampling === 'auto') state.count = state.suggestion.count;
   renderPanel();
   refresh();
 }
 
+/** The per-series mode overrides, in the form the engine takes them. */
+function currentModes(): Array<ExtractionMode | undefined> {
+  return state.modes.map((m) => (m === 'auto' ? undefined : m));
+}
+
+/** Which analysed series are ticked, in order. Styles are indexed by these. */
+function shownIndices(): number[] {
+  if (!state.analysis) return [];
+  return state.analysis.series.map((_, i) => i).filter((i) => state.visible.has(i));
+}
+
+/** Points that carry a value, as opposed to a cell the grid ran past. */
+function finitePoints(s: DataSeries): number {
+  return s.points.reduce(
+    (n, p) => n + (Number.isFinite(p.x) && Number.isFinite(p.y) ? 1 : 0),
+    0,
+  );
+}
+
+/** A legend name if one was read and adopted, otherwise the generic one. */
+function seriesName(read: string | undefined, index: number): string {
+  if (state.readLabels === 'off') return `series_${index + 1}`;
+  return read && read.trim() ? read.trim() : `series_${index + 1}`;
+}
+
 function currentSeries(): DataSeries[] {
   if (!state.analysis || !state.calibration) return [];
-  return buildSeries(state.analysis, {
+  const series = buildSeries(state.analysis, {
     calibration: state.calibration,
     resample:
       state.sampling === 'native'
@@ -753,7 +816,14 @@ function currentSeries(): DataSeries[] {
         : { kind: 'uniform', count: Math.max(2, state.count) },
     names: state.names,
     include: state.visible,
+    modes: currentModes(),
   });
+  // Styles are held per *analysed* series so they survive a series being
+  // unticked and ticked again, and are seeded from the way it was drawn.
+  shownIndices().forEach((index, position) => {
+    state.styles[index] ??= defaultStyle(series[position], index);
+  });
+  return series;
 }
 
 function exportName(extension: string): string {
@@ -773,6 +843,7 @@ function render(): void {
   stageHead.hidden = state.phase !== 'ready';
   replotBlock.hidden = state.phase !== 'ready';
   overlayBlock.hidden = state.phase !== 'ready';
+  tableBlock.hidden = state.phase !== 'ready';
   renderPanel();
   if (state.phase === 'ready') refresh();
 }
@@ -786,27 +857,35 @@ function render(): void {
 function refresh(): void {
   if (state.phase !== 'ready' || !state.analysis || !state.calibration) return;
   const series = currentSeries();
+  const styles = shownIndices().map((i) => state.styles[i]);
   stage.setCalibration(state.calibration);
-  chart.setData({
+  chart.update({
     series,
+    styles,
     calibration: state.calibration,
     rect: state.analysis.frame.rect,
     units: state.analysis.units,
-    pointRadius: state.sampling === 'native' ? 0 : Math.min(2.5, state.pointRadius),
   });
   if (state.croppedBitmap) {
     overlay.setData({
       bitmap: state.croppedBitmap,
       series,
+      styles,
       calibration: state.calibration,
       imageOpacity: state.imageOpacity,
-      pointRadius: state.pointRadius,
+      pointScale: state.pointRadius,
       magnify: state.magnify,
     });
   }
-  replotNote.textContent = `${series.length} of ${state.analysis.series.length} series, ${
-    series[0]?.points.length ?? 0
-  } points`;
+  // Every count on the page comes from this one build, and each says exactly
+  // what it counts. The header said "27 points" beside a series list reading
+  // 27/26/123/40/55 and an output panel reading "123 rows", and all three were
+  // measuring different things without saying so.
+  const total = series.reduce((n, s) => n + finitePoints(s), 0);
+  replotNote.textContent =
+    `${series.length} of ${state.analysis.series.length} series shown, ` +
+    `${total} extracted point${total === 1 ? '' : 's'} between them`;
+  renderTable(series);
 
   // The controls stay put; only the values they display are refreshed.
   for (const id of ['xa', 'xb', 'ya', 'yb'] as AnchorId[]) {
@@ -822,10 +901,17 @@ function refresh(): void {
   if (mapping) mapping.textContent = mappingText(series);
   const summary = document.getElementById('output-summary');
   if (summary) summary.textContent = outputSummary(series);
+  const explain = document.getElementById('output-explain');
+  if (explain) explain.innerHTML = explainHtml(series);
   const preview = document.getElementById('preview');
   if (preview) preview.textContent = previewText(series);
   const countInput = document.getElementById('count') as HTMLInputElement | null;
-  if (countInput && document.activeElement !== countInput) countInput.value = String(state.count);
+  if (countInput && document.activeElement !== countInput) {
+    const curves = curveCount(series);
+    countInput.disabled = state.sampling !== 'uniform' || curves === 0;
+    countInput.value = curves === 0 ? '' : String(state.count);
+    countInput.placeholder = curves === 0 ? 'no curves' : '';
+  }
 }
 
 function mappingText(series: DataSeries[]): string {
@@ -914,22 +1000,12 @@ function renderPanel(): void {
 
     <div class="card">
       <h2>Series</h2>
+      <label class="check-row" style="margin-bottom:8px">
+        <input type="checkbox" id="read-labels" ${state.readLabels !== 'off' ? 'checked' : ''} />
+        Take names from legible labels on the chart
+      </label>
       <div id="series-list">
-        ${analysis.series
-          .map((s, i) => {
-            const built = series.find((d) => d.name === state.names[i]);
-            return `
-          <div class="series-row">
-            <input type="checkbox" id="vis-${i}" ${state.visible.has(i) ? 'checked' : ''}
-              aria-label="Include ${escapeHtml(state.names[i])}" />
-            <span class="swatch" style="background:${cssColour(s.traced.colour)}"></span>
-            <span class="series-name"><input type="text" id="name-${i}" value="${escapeHtml(state.names[i])}" aria-label="Name for series ${i + 1}" /></span>
-            <span class="series-meta">${s.traced.mode === 'marker' ? `${s.traced.points.length} pts` : 'curve'}${
-              built ? `<br>±${escapeHtml(compact(built.uncertainty.y))}` : ''
-            }</span>
-          </div>`;
-          })
-          .join('')}
+        ${analysis.series.map((s, i) => seriesCard(s, i, series)).join('')}
       </div>
       ${analysis.series.length === 0 ? '<p class="status">No series were found. Try a tighter crop.</p>' : ''}
     </div>
@@ -938,7 +1014,7 @@ function renderPanel(): void {
       <h2>Output</h2>
       <div class="row">
         <div>
-          <label for="sampling">Point count</label>
+          <label for="sampling">Point count for curves</label>
           <select id="sampling">
             <option value="auto">Automatic</option>
             <option value="uniform">Choose a number</option>
@@ -947,12 +1023,14 @@ function renderPanel(): void {
         </div>
         <div>
           <label for="count">Points</label>
-          <input type="number" id="count" min="2" max="20000" step="1" value="${state.count}"
-            ${state.sampling === 'auto' || state.sampling === 'native' ? 'disabled' : ''} />
+          <input type="number" id="count" min="2" max="20000" step="1"
+            value="${curveCount(series) === 0 ? '' : state.count}"
+            placeholder="${curveCount(series) === 0 ? 'no curves' : ''}"
+            ${state.sampling !== 'uniform' || curveCount(series) === 0 ? 'disabled' : ''} />
         </div>
       </div>
-      <p class="status" id="sampling-reason">${escapeHtml(state.suggestion?.reason ?? '')}</p>
       <p class="status" id="output-summary">${escapeHtml(outputSummary(series))}</p>
+      <div class="explain" id="output-explain">${explainHtml(series)}</div>
     </div>
 
     <div class="card">
@@ -986,6 +1064,64 @@ function renderPanel(): void {
   `;
 
   wirePanel();
+
+  /**
+   * One series: whether it is exported, what it is called, how it was read and
+   * how it is drawn.
+   *
+   * The mode is per series and visible rather than buried in a pre-extraction
+   * setting, because a chart may carry a curve and a scatter at once and the
+   * automatic choice is a judgement about ink that the user is entitled to
+   * overrule. It costs a rebuild, not a re-analysis, so it applies instantly.
+   */
+  function seriesCard(s: Analysis['series'][number], i: number, built: DataSeries[]): string {
+    const style = state.styles[i];
+    const mode = state.modes[i] === 'auto' ? s.autoMode : state.modes[i];
+    const data = built.find((d) => d.name === state.names[i]);
+    const points = data ? finitePoints(data) : (mode === 'marker' ? s.marker.points.length : 0);
+    const how =
+      mode === 'marker'
+        ? `${points} points, one per marker`
+        : `${points} points, resampled from the drawn line`;
+    const shapes = MARKER_SHAPES.map(
+      (shape) =>
+        `<option value="${shape}"${style?.shape === shape ? ' selected' : ''}>${SHAPE_NAMES[shape]}</option>`,
+    ).join('');
+    return `
+      <div class="series-row">
+        <input type="checkbox" id="vis-${i}" ${state.visible.has(i) ? 'checked' : ''}
+          aria-label="Include ${escapeHtml(state.names[i])}" />
+        <span class="swatch" style="background:${escapeHtml(style?.colour ?? cssColour(s.traced.colour))}"></span>
+        <span class="series-name"><input type="text" id="name-${i}"
+          value="${escapeHtml(state.names[i])}" aria-label="Name for series ${i + 1}" /></span>
+        <span class="series-meta">${escapeHtml(how)}${
+          data ? `<br>±${escapeHtml(compact(data.uncertainty.y))}` : ''
+        }</span>
+        <details class="series-more">
+          <summary>How it is read and drawn</summary>
+          <div class="series-options">
+            <label for="mode-${i}">Read as</label>
+            <select id="mode-${i}">
+              <option value="auto"${state.modes[i] === 'auto' ? ' selected' : ''}>Automatic (${s.autoMode})</option>
+              <option value="marker"${state.modes[i] === 'marker' ? ' selected' : ''}>Markers - one point per marker</option>
+              <option value="curve"${state.modes[i] === 'curve' ? ' selected' : ''}>Curve - trace and resample</option>
+            </select>
+            <label for="shape-${i}">Marker</label>
+            <select id="shape-${i}">${shapes}</select>
+            <label for="size-${i}">Marker size</label>
+            <input type="range" id="size-${i}" min="0" max="20" step="1" value="${style?.size ?? 6}" />
+            <label for="linew-${i}">Line width</label>
+            <input type="range" id="linew-${i}" min="0" max="8" step="0.5" value="${style?.lineWidth ?? 2}" />
+            <label for="colour-${i}">Colour</label>
+            <input type="color" id="colour-${i}" value="${hexColour(style?.colour ?? cssColour(s.traced.colour))}" />
+            <label class="check-row" style="grid-column:1/-1">
+              <input type="checkbox" id="line-${i}" ${style?.line ? 'checked' : ''} />
+              Join the points with a line
+            </label>
+          </div>
+        </details>
+      </div>`;
+  }
 
   function axisBlock(axis: 'x' | 'y', title: string, first: string, second: string): string {
     const a = cal[axis];
@@ -1045,6 +1181,21 @@ function wirePanel(): void {
   }
   document.getElementById('recalc')?.addEventListener('click', () => recalculate());
 
+  const readLabelsBox = document.getElementById('read-labels') as HTMLInputElement | null;
+  readLabelsBox?.addEventListener('change', () => {
+    state.readLabels = readLabelsBox.checked ? 'auto' : 'off';
+    // Only names the user has not typed over are replaced, so turning this on
+    // and off never discards work.
+    state.names = state.names.map((current, i) =>
+      current === state.readNames[i] || current === `series_${i + 1}`
+        ? seriesName(state.readNames[i], i)
+        : current,
+    );
+    scheduleSave();
+    renderPanel();
+    refresh();
+  });
+
   const list = document.getElementById('series-list');
   if (list && state.analysis) {
     state.analysis.series.forEach((_, i) => {
@@ -1061,6 +1212,39 @@ function wirePanel(): void {
         renderPanel();
         refresh();
       });
+      const mode = document.getElementById(`mode-${i}`) as HTMLSelectElement | null;
+      mode?.addEventListener('change', () => {
+        state.modes[i] = mode.value as State['modes'][number];
+        // The mode changes what a series *is*, so the drawing default and the
+        // proposed point count both have to follow it.
+        state.styles[i] = undefined as unknown as SeriesStyle;
+        if (state.analysis) {
+          state.suggestion = suggestPointCount(state.analysis, currentModes());
+          if (state.sampling === 'auto') state.count = state.suggestion.count;
+        }
+        scheduleSave();
+        renderPanel();
+        refresh();
+      });
+
+      const restyle = (patch: Partial<SeriesStyle>) => {
+        const current = state.styles[i];
+        if (!current) return;
+        state.styles[i] = { ...current, ...patch };
+        refresh();
+        const swatch = list.querySelectorAll('.swatch')[i] as HTMLElement | undefined;
+        if (swatch && patch.colour) swatch.style.background = patch.colour;
+      };
+      const shape = document.getElementById(`shape-${i}`) as HTMLSelectElement | null;
+      shape?.addEventListener('change', () => restyle({ shape: shape.value as SeriesStyle['shape'] }));
+      const size = document.getElementById(`size-${i}`) as HTMLInputElement | null;
+      size?.addEventListener('input', () => restyle({ size: Number(size.value) }));
+      const lineWidth = document.getElementById(`linew-${i}`) as HTMLInputElement | null;
+      lineWidth?.addEventListener('input', () => restyle({ lineWidth: Number(lineWidth.value) }));
+      const colour = document.getElementById(`colour-${i}`) as HTMLInputElement | null;
+      colour?.addEventListener('input', () => restyle({ colour: colour.value }));
+      const line = document.getElementById(`line-${i}`) as HTMLInputElement | null;
+      line?.addEventListener('change', () => restyle({ line: line.checked }));
     });
   }
 
@@ -1129,15 +1313,182 @@ async function send(destination: 'save' | 'share', format: 'csv' | 'xlsx'): Prom
   }
 }
 
+/**
+ * What the tool did to *this* chart, in sentences.
+ *
+ * The captain asked to be taught what happened rather than shown a parameter
+ * dump, and the specific thing he wanted to be able to do is predict what
+ * pressing Recalculate would produce before pressing it. So each paragraph
+ * names the numbers this extraction actually has, and the last one says what
+ * the other settings would give instead.
+ */
+function outputExplanation(series: DataSeries[]): string[] {
+  if (series.length === 0) return ['Nothing is ticked, so there is nothing to export.'];
+  const table = toTable(series);
+  const markers = series.filter((s) => s.mode === 'marker');
+  const curves = series.filter((s) => s.mode === 'curve');
+  const suggestion = state.suggestion;
+  const out: string[] = [];
+
+  const list = (names: string[]) =>
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
+  out.push(
+    `The file will have ${table.rows.length} row${table.rows.length === 1 ? '' : 's'} and ` +
+      `${table.columns.length} column${table.columns.length === 1 ? '' : 's'}.`,
+  );
+
+  if (markers.length) {
+    out.push(
+      `${list(markers.map((s) => s.name))} ${markers.length === 1 ? 'is' : 'are'} scattered points: ` +
+        `each drawn marker was found separately and returns one row, at the position it was drawn at. ` +
+        `That is ${markers.map((s) => `${finitePoints(s)} for ${s.name}`).join(', ')}. ` +
+        'There is no point count to choose for these - the markers are the answer - so they keep ' +
+        'their own x column rather than being moved onto the shared grid.',
+    );
+  }
+
+  if (curves.length) {
+    const rows = finitePoints(curves[0]);
+    out.push(
+      `${list(curves.map((s) => s.name))} ${curves.length === 1 ? 'is a' : 'are'} drawn ` +
+        `curve${curves.length === 1 ? '' : 's'}: there are no separate markers to find, so the drawn ` +
+        `line is traced and then sampled at ${rows} positions evenly spaced across the x axis. ` +
+        'Those rows are a resampling of the line, not the points whoever drew the chart plotted.',
+    );
+    if (state.sampling === 'auto' && suggestion) {
+      out.push(
+        suggestion.confident
+          ? `The count came from the trace itself: it kinks every ${suggestion.spacingPx?.toFixed(1)} px ` +
+            `or so, ${suggestion.vertices} times across the plot, and each kink is a vertex of the ` +
+            'drawn polyline - a real data point. It is an estimate, and it reads low where the line is ' +
+            'drawn wider than the spacing of its own points, because then some kinks are not separable ' +
+            'from the ink.'
+          : `No regular vertex spacing could be read off the trace, so the count is one row per pixel ` +
+            'column. That neither invents a value nor discards one, and it is the honest default when ' +
+            'the picture will not say what the sampling rate was.',
+      );
+    } else if (state.sampling === 'uniform') {
+      out.push(
+        `The count is yours: ${state.count} rows, evenly spaced across the same x range. ` +
+          (suggestion
+            ? `The trace itself suggests ${suggestion.count}.`
+            : ''),
+      );
+    } else {
+      out.push(
+        'One row per pixel column of the plot, which neither invents a value nor discards one.',
+      );
+    }
+  }
+
+  const nextLines: string[] = [];
+  if (curves.length) {
+    const columns = state.analysis
+      ? state.analysis.frame.rect.x1 - state.analysis.frame.rect.x0 + 1
+      : 0;
+    if (state.sampling !== 'uniform') {
+      nextLines.push(
+        'Choosing a number instead gives you exactly that many rows across the same x range, ' +
+          'each one interpolated between the same traced pixels: fewer rows do not change the shape ' +
+          'of the curve, they sample it more coarsely.',
+      );
+    }
+    if (state.sampling !== 'native' && columns > 0) {
+      nextLines.push(`One row per pixel column would give ${columns} rows.`);
+    }
+    if (state.sampling !== 'auto' && suggestion) {
+      nextLines.push(`Automatic would give ${suggestion.count}.`);
+    }
+  }
+  if (markers.length) {
+    nextLines.push(
+      `Setting ${markers[0].name} to Curve instead would stop treating its markers as separate ` +
+        'points: the tool would take one y for every x column its ink covers and put that on the ' +
+        `shared grid, so its ${finitePoints(markers[0])} measured positions would be replaced by ` +
+        'interpolated ones.',
+    );
+  }
+  if (curves.length) {
+    nextLines.push(
+      `Setting ${curves[0].name} to Markers would return one point per separate blob of its ink, ` +
+        'which is right for a scatter and wrong for a line - a solid line is one blob and comes ' +
+        'back as one point.',
+    );
+  }
+  if (nextLines.length) out.push(nextLines.join(' '));
+
+  const merged = state.analysis?.series.reduce((n, s, i) => {
+    const mode = state.modes[i] === 'auto' ? s.autoMode : state.modes[i];
+    return n + (state.visible.has(i) && mode === 'marker' ? s.mergedComponents : 0);
+  }, 0);
+  if (merged) {
+    out.push(
+      `${merged} of those blobs ${merged === 1 ? 'is' : 'are'} wider than a single marker, so ` +
+        `${merged === 1 ? 'it holds' : 'they hold'} several markers drawn close enough to touch and ` +
+        `${merged === 1 ? 'comes' : 'come'} back as one point at the shared centre. There is nothing ` +
+        'in the picture that says where one marker ends and the next begins, so the count reported ' +
+        'is the count found rather than an extrapolation.',
+    );
+  }
+  return out;
+}
+
+/** One line for the panel header, saying exactly what it counts. */
 function outputSummary(series: DataSeries[]): string {
   if (series.length === 0) return 'Nothing selected.';
-  const rows = Math.max(...series.map((s) => s.points.length));
-  const marker = series.some((s) => s.mode === 'marker');
-  return `${series.length} series, ${rows} rows, evenly spaced in x. ${
-    marker
-      ? 'Marker rows are detected data points, at the x positions they were drawn at.'
-      : 'Curve rows are a resampling of the drawn line, not the original data points.'
-  }`;
+  const table = toTable(series);
+  return `${series.length} series, ${table.rows.length} rows, ${table.columns.length} columns.`;
+}
+
+/**
+ * The extracted numbers as a table.
+ *
+ * The same table the export writes, so what is on screen and what lands in the
+ * file cannot disagree. Selectable, scrollable in both directions, and with the
+ * header row and the first column pinned so a wide table stays readable on a
+ * phone.
+ */
+function renderTable(series: DataSeries[]): void {
+  const table = toTable(series);
+  if (table.columns.length === 0) {
+    tableHost.innerHTML = '<p class="status">Nothing is ticked, so there is nothing to show.</p>';
+    tableNote.textContent = '';
+    return;
+  }
+  const shown = table.rows.slice(0, TABLE_ROW_LIMIT);
+  tableNote.textContent =
+    shown.length < table.rows.length
+      ? `first ${shown.length} of ${table.rows.length} rows - the export has all of them`
+      : `${table.rows.length} row${table.rows.length === 1 ? '' : 's'} x ${table.columns.length} columns`;
+  const head = table.columns.map((c) => `<th scope="col">${escapeHtml(c)}</th>`).join('');
+  const body = shown
+    .map(
+      (row) =>
+        `<tr>${row
+          .map((v) => `<td>${v === null ? '' : escapeHtml(cell(v))}</td>`)
+          .join('')}</tr>`,
+    )
+    .join('');
+  tableHost.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * How many rows the on-screen table draws.
+ *
+ * A one-point-per-pixel-column export is thousands of rows, and putting all of
+ * them in the DOM costs a phone more than it is worth for a table nobody reads
+ * past the top of. The export is never truncated, and the note says so.
+ */
+const TABLE_ROW_LIMIT = 500;
+
+/** Six significant figures, which is what the CSV writes. */
+function cell(v: number): string {
+  const a = Math.abs(v);
+  if (a !== 0 && (a >= 1e6 || a < 1e-4)) return v.toExponential(6);
+  return String(Number(v.toFixed(6)));
 }
 
 function previewText(series: DataSeries[]): string {
@@ -1147,6 +1498,37 @@ function previewText(series: DataSeries[]): string {
   const head = lines.filter((l) => l.startsWith('#'));
   const body = lines.filter((l) => !l.startsWith('#') && l.trim());
   return [...head, ...body.slice(0, 6), body.length > 6 ? `… ${body.length - 1} rows` : ''].join('\n');
+}
+
+/** Human names for the marker shapes offered per series. */
+const SHAPE_NAMES: Record<string, string> = {
+  circle: 'Circle',
+  rect: 'Square',
+  triangle: 'Triangle',
+  diamond: 'Diamond',
+  roundRect: 'Rounded square',
+  pin: 'Pin',
+  arrow: 'Arrow',
+  none: 'No marker',
+};
+
+/** How many of the shown series are curves, which is what a count applies to. */
+function curveCount(series: DataSeries[]): number {
+  return series.filter((s) => s.mode === 'curve').length;
+}
+
+function explainHtml(series: DataSeries[]): string {
+  return outputExplanation(series)
+    .map((p) => `<p>${escapeHtml(p)}</p>`)
+    .join('');
+}
+
+/** `#rrggbb` for a colour input, from whatever CSS colour is stored. */
+function hexColour(css: string): string {
+  const m = css.match(/(\d+)\D+(\d+)\D+(\d+)/);
+  if (!m) return '#000000';
+  const hex = (v: string) => Math.max(0, Math.min(255, Number(v))).toString(16).padStart(2, '0');
+  return `#${hex(m[1])}${hex(m[2])}${hex(m[3])}`;
 }
 
 function round(v: number): string {

@@ -336,9 +336,9 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
       code: 'markers-merged',
       level: 'info',
       message:
-        `${mergedTotal} blob${mergedTotal > 1 ? 's are' : ' is'} wider than a single marker: ` +
-        'markers drawn close enough to touch come back as one point at their shared centre. ' +
-        'The count reported is the count found, never an extrapolation.',
+        `${mergedTotal} blob${mergedTotal > 1 ? 's are' : ' is'} wider than a single marker, so ` +
+        `${mergedTotal > 1 ? 'they hold' : 'it holds'} markers drawn close enough to touch. ` +
+        'See the Output panel.',
     });
   }
 
