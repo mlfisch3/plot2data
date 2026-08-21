@@ -30,6 +30,36 @@ interface RealCheck {
   expectMode?: 'curve' | 'marker';
   /** Measure how much of each spike's height the trace reaches. */
   measureSpikes?: boolean;
+  /** Break the result down per series: names, counts, merged blobs. */
+  perSeries?: boolean;
+}
+
+/**
+ * What a marker series found, and what it is likely to have missed.
+ *
+ * A marker series returns one point per connected blob, so markers drawn close
+ * enough to touch come back as one. There is nothing in the picture that says
+ * where one ends and the next begins, so the count reported is always the count
+ * found. `likelyDrawn` is offered separately and never exported: it divides
+ * each blob's ink area by the typical single marker's, which undercounts
+ * wherever markers overlap rather than merely touch, so it is a lower bound on
+ * what was drawn and not a measurement of it.
+ */
+function markerCensus(analysed: AnalysedSeries): {
+  found: number;
+  merged: number;
+  likelyDrawn: number;
+} {
+  const areas = analysed.components.map((c) => c.area).sort((a, b) => a - b);
+  const typical = areas.length ? areas[areas.length >> 1] : 0;
+  const likelyDrawn = typical > 0
+    ? analysed.components.reduce((n, c) => n + Math.max(1, Math.round(c.area / typical)), 0)
+    : analysed.components.length;
+  return {
+    found: analysed.marker.points.length,
+    merged: analysed.mergedComponents,
+    likelyDrawn,
+  };
 }
 
 /**
@@ -154,6 +184,7 @@ const REAL: RealCheck[] = [
     expectScale: { x: 'linear', y: 'log' },
     expectSeries: 5,
     expectMode: 'marker',
+    perSeries: true,
   },
   {
     file: 'examples/real/03-women-men-percent.png',
@@ -304,6 +335,48 @@ async function main() {
   );
   lines.push('');
 
+  lines.push('### Why an antialiasing halo is not a series');
+  lines.push('');
+  lines.push(
+    'On the microprocessor chart the tool once reported an orange series of 123 points sitting on the red markers,',
+  );
+  lines.push(
+    'and no orange series where the orange markers actually are. Every one of those 123 points was a single-pixel',
+  );
+  lines.push(
+    'speck within two pixels of red ink, and the cause was one comparison: a pixel was assigned to the series whose',
+  );
+  lines.push(
+    'saturated colour it was nearest. Desaturating a dark red towards white runs through mid-tones that are nearer',
+  );
+  lines.push(
+    'a saturated orange than the red they came from, so every red marker donated a ring of specks to the orange',
+  );
+  lines.push('series.');
+  lines.push('');
+  lines.push(
+    'A pixel is now measured against each series\' **blend segment** - the colours that ink can produce on that',
+  );
+  lines.push(
+    'paper - rather than against its saturated colour. The margin is not close: the pixel that broke it sits 0.9',
+  );
+  lines.push('colour units from red\'s segment and 47 from orange\'s.');
+  lines.push('');
+  lines.push(
+    'The specks then outnumbered the real markers 123 to 54, which dragged the marker size window\'s median down to',
+  );
+  lines.push(
+    '0.79 px, so the window kept the dust and discarded every real marker. The window is now floored by the size of',
+  );
+  lines.push(
+    'the component holding the median *unit of ink*, which dust cannot move. `scatter-halo-colours` is in the corpus',
+  );
+  lines.push(
+    'for this: four marker series whose antialiased edges are strong, two of the colours chosen so that one series\'',
+  );
+  lines.push('fade to white passes through another\'s colour. It fails against the previous rule.');
+  lines.push('');
+
   lines.push("## The captain's real screenshots");
   lines.push('');
   lines.push(
@@ -372,6 +445,29 @@ async function main() {
       lines.push(`| reported uncertainty | - | ${describeUncertainty(series[0])} |`);
     }
     lines.push('');
+
+    if (check.perSeries) {
+      lines.push(
+        'Per series. The name is read off the chart\'s own legend, matched to the series by the colour the label ' +
+          'text is drawn in. "Points" is one per detected marker, at the position it was drawn at - never a ' +
+          'resampling and never an estimate. "Merged blobs" counts the kept blobs wider than a single marker, ' +
+          'each of which holds several markers drawn close enough to touch and comes back as one point. The last ' +
+          'column divides those blobs\' ink by a single marker\'s: it is an estimate, and a low one, because ' +
+          'markers that overlap rather than merely touch share their pixels. It is reported separately from the ' +
+          'count that is measured, and it is never what the tool exports.',
+      );
+      lines.push('');
+      lines.push('| Series name read from the legend | Points | Merged blobs | Markers those blobs likely hold |');
+      lines.push('| --- | --- | --- | --- |');
+      for (const analysed of analysis.series) {
+        const census = markerCensus(analysed);
+        lines.push(
+          `| ${analysed.label?.text ?? '*(not read)*'} | ${census.found} | ${census.merged} | ` +
+            `${census.likelyDrawn} |`,
+        );
+      }
+      lines.push('');
+    }
     if (analysis.warnings.length) {
       lines.push('Warnings raised in the UI and written into the CSV header:');
       lines.push('');
@@ -391,10 +487,11 @@ async function main() {
   );
   lines.push(
     '| `02-microprocessor` | pass, with caveats | `10^n` superscript decades read, log axis detected, all five ' +
-      'marker series separated, legend outside the frame ignored. Marker counts are lower than the true point ' +
-      'counts because overlapping markers merge into one blob - expected on this chart and reported honestly as ' +
-      'the number of points found. A handful of dotted-grid remnants survive as stray points near the top and ' +
-      'bottom gridlines. |',
+      'marker series separated and each landing where it was drawn, all five names read off the colour-coded ' +
+      'legend outside the frame. Marker counts are lower than the true point counts because overlapping markers ' +
+      'merge into one blob - expected on this chart and reported honestly as the number of points found, with the ' +
+      'merged blobs counted separately above. The `10^3` in the Single-Thread Performance label comes back as ' +
+      '`10%`: the recogniser flattens the superscript, the name is editable, and no number depends on it. |',
   );
   lines.push(
     '| `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the ' +
@@ -453,10 +550,25 @@ async function main() {
       'against 0.51% of clipping before.',
   );
   lines.push(
-    '- **The automatic point count is an estimate.** It counts the kinks in the trace, so a line drawn wider than ' +
-      'the spacing of its own data points comes out low - 235 against 331 on the retail-sales chart. Across the ' +
-      'real screenshots it lands within about a factor of two of the true point count, which is the right order for ' +
-      'a default; the count is editable and one point per pixel column is always available.',
+    '- **The automatic point count is an estimate, and applies only to curves.** It counts the kinks in the trace, ' +
+      'so a line drawn wider than the spacing of its own data points comes out low - 235 against 331 on the ' +
+      'retail-sales chart. Across the real screenshots it lands within about a factor of two of the true point ' +
+      'count, which is the right order for a default; the count is editable and one point per pixel column is ' +
+      'always available. A marker series has no automatic count at all: the markers are the answer.',
+  );
+  lines.push(
+    '- **A series drawn in a tint of another series\' colour cannot be separated from that series\' own ' +
+      'antialiased edge.** A light blue is, by colour alone, exactly what a dark blue fading into white paper ' +
+      'produces, and the two clusters are then indistinguishable before any spatial test can run. What rescues the ' +
+      'ordinary case is that a halo *wraps* the ink it came from; a tint drawn as its own series elsewhere on the ' +
+      'chart does not, and is kept. Two series a shade apart in the same hue is the case this does not solve, and ' +
+      'the corpus records it as a limit rather than testing it as if it were solved.',
+  );
+  lines.push(
+    '- **Series names read from a legend are cosmetic.** They are matched to a series by the colour the label text ' +
+      'is drawn in, adopted only where a legend\'s entries line up into a column or a row - which is what tells an ' +
+      'entry from a chart title drawn in the same colour - and they fall back to `series_n` otherwise. Nothing ' +
+      'downstream of the name touches a coordinate, and every name stays editable.',
   );
   lines.push('');
 

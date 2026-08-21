@@ -5,7 +5,7 @@ Regenerate with `npm run report`; the same measurements are asserted by `npm tes
 
 ## Synthetic corpus
 
-17 plots rendered from analytic functions with Chart.js in headless Chrome, so ground truth is exact.
+18 plots rendered from analytic functions with Chart.js in headless Chrome, so ground truth is exact.
 Error is RMS over 200 points resampled uniformly across the axis, as a percentage of the axis full-scale range,
 compared against the same function the chart was drawn from. Log axes are compared in log space.
 "Axis error" is how far the derived calibration itself lands from the true axis range.
@@ -27,6 +27,7 @@ with the number of turning points a case has; a monotone curve has none and read
 | `log-y` | 1/1 | curve | linear/log | 0.043% | 100% | - | 0.046% / 0.040% |
 | `log-y-multi` | 2/2 | curve | linear/log | 0.047%, 0.048% | 100%, 100% | -, - | 0.046% / 0.043% |
 | `scatter-markers` | 1/1 | marker | linear/linear | 0.031% | 99% | - | 0.017% / 0.054% |
+| `scatter-halo-colours` | 4/4 | marker | linear/linear | 0.027%, 0.025%, 0.017%, 0.018% | 99%, 99%, 99%, 99% | -, -, -, - | 0.017% / 0.057% |
 | `jpeg-compressed` | 1/1 | curve | linear/linear | 0.036% | 100% | -0.001% (3) | 0.021% / 0.061% |
 | `offset-annotation` | 1/1 | curve | linear/linear | 0.032% | 100% | - | 0.083% / 0.056% |
 | `retina-2x` | 1/1 | curve | linear/linear | 0.196% | 99% | 0.108% (3) | 0.096% / 0.135% |
@@ -59,6 +60,25 @@ which is where the two legs of the join meet - the vertex.
 
 The correction costs one case a little: `narrow-small`, the 480x320 plot, went from 0.062% to 0.077% RMS - about a twelfth of a
 pixel, on the smallest image in the corpus, and six times inside its budget. Every other case is unchanged or better.
+
+### Why an antialiasing halo is not a series
+
+On the microprocessor chart the tool once reported an orange series of 123 points sitting on the red markers,
+and no orange series where the orange markers actually are. Every one of those 123 points was a single-pixel
+speck within two pixels of red ink, and the cause was one comparison: a pixel was assigned to the series whose
+saturated colour it was nearest. Desaturating a dark red towards white runs through mid-tones that are nearer
+a saturated orange than the red they came from, so every red marker donated a ring of specks to the orange
+series.
+
+A pixel is now measured against each series' **blend segment** - the colours that ink can produce on that
+paper - rather than against its saturated colour. The margin is not close: the pixel that broke it sits 0.9
+colour units from red's segment and 47 from orange's.
+
+The specks then outnumbered the real markers 123 to 54, which dragged the marker size window's median down to
+0.79 px, so the window kept the dust and discarded every real marker. The window is now floored by the size of
+the component holding the median *unit of ink*, which dust cannot move. `scatter-halo-colours` is in the corpus
+for this: four marker series whose antialiased edges are strong, two of the colours chosen so that one series'
+fade to white passes through another's colour. It fails against the previous rule.
 
 ## The captain's real screenshots
 
@@ -117,6 +137,20 @@ What it demands: 10^n superscript log axis, five marker-only series, dotted grid
 | mode | marker | marker |
 | reported uncertainty | - | +/-0.511 in x, x or / 1.357 in y (log axis) |
 
+Per series. The name is read off the chart's own legend, matched to the series by the colour the label text is drawn in. "Points" is one per detected marker, at the position it was drawn at - never a resampling and never an estimate. "Merged blobs" counts the kept blobs wider than a single marker, each of which holds several markers drawn close enough to touch and comes back as one point. The last column divides those blobs' ink by a single marker's: it is an estimate, and a low one, because markers that overlap rather than merely touch share their pixels. It is reported separately from the count that is measured, and it is never what the tool exports.
+
+| Series name read from the legend | Points | Merged blobs | Markers those blobs likely hold |
+| --- | --- | --- | --- |
+| Frequency (MHz) | 27 | 7 | 42 |
+| Single-Thread Performance (SpecINT x 10%) | 26 | 8 | 47 |
+| Transistors (thousands) | 54 | 4 | 86 |
+| Number of Logical Cores | 35 | 6 | 67 |
+| Typical Power (Watts) | 52 | 5 | 78 |
+
+Warnings raised in the UI and written into the CSV header:
+
+- *info*: 30 blobs are wider than a single marker, so they hold markers drawn close enough to touch. See the Output panel.
+
 ### `03-women-men-percent.png` - Women and men, percent
 
 What it demands: text inside the plot in the series colour, percent unit on one label only, no y-axis line.
@@ -169,7 +203,7 @@ Warnings raised in the UI and written into the CSV header:
 | Case | Verdict | Notes |
 | --- | --- | --- |
 | `01-panel1/2/3` (cropped) | pass | Abbreviated `k` labels parsed, axes within ~0.3% of full scale. Panel 2 works despite its data line lying on top of the x axis. The uncropped three-panel screenshot is correctly rejected: no single plot frame is found, and the tool says to crop rather than guessing. |
-| `02-microprocessor` | pass, with caveats | `10^n` superscript decades read, log axis detected, all five marker series separated, legend outside the frame ignored. Marker counts are lower than the true point counts because overlapping markers merge into one blob - expected on this chart and reported honestly as the number of points found. A handful of dotted-grid remnants survive as stray points near the top and bottom gridlines. |
+| `02-microprocessor` | pass, with caveats | `10^n` superscript decades read, log axis detected, all five marker series separated and each landing where it was drawn, all five names read off the colour-coded legend outside the frame. Marker counts are lower than the true point counts because overlapping markers merge into one blob - expected on this chart and reported honestly as the number of points found, with the merged blobs counted separately above. The `10^3` in the Single-Thread Performance label comes back as `10%`: the recogniser flattens the superscript, the name is editable, and no number depends on it. |
 | `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the endpoint annotations `12`, `20`, `46`, `36` are rejected on shape, not colour. The extracted endpoints land within 0.8% of full scale of the values the chart prints. The percent unit is picked up from the single label that carries it. The x axis reads 1969 rather than 1970 because the final `2021` label is right-aligned to the plot edge rather than centred on its tick, which pulls the fit by about one year; the anchors are editable and the residual warning fires. |
 | `04-hits-per-visit` | pass | Non-round two-decimal tick labels handled by the least-squares fit; the two labels OCR misread are discarded and reported. Cream background and rotated axis title cause no trouble. |
 | `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain's own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 5.5 px wide and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink: the automatic point count proposes 235 against a true 331, and says what it counted. Spike amplitude recovered rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the mean peak shortfall fell from 4.30% of full scale to 0.01%. |
@@ -183,5 +217,7 @@ Warnings raised in the UI and written into the CSV header:
 - **Line and marker drawn together** merge into one component, so the tool traces the curve rather than returning the marker positions. That is the honest reading of the ink, and the CSV says so.
 - **The worst individual spike is read lower than the average one.** On the retail-sales chart the mean spike recovers about 95% of its drawn amplitude and the median about 98%, but the worst single spike recovers about half. Those are the spikes whose neighbours are close enough that the ink merges, leaving no separate tip to find.
 - **A peak at a mitred corner is read a little high.** The correction descends from the outermost ink until the ink is one stroke across, which finds the vertex for a round corner exactly and for a mitred one to within a fraction of a stroke. On the corpus's deliberately extreme sawtooth that is -0.26% of full scale, against 0.51% of clipping before.
-- **The automatic point count is an estimate.** It counts the kinks in the trace, so a line drawn wider than the spacing of its own data points comes out low - 235 against 331 on the retail-sales chart. Across the real screenshots it lands within about a factor of two of the true point count, which is the right order for a default; the count is editable and one point per pixel column is always available.
+- **The automatic point count is an estimate, and applies only to curves.** It counts the kinks in the trace, so a line drawn wider than the spacing of its own data points comes out low - 235 against 331 on the retail-sales chart. Across the real screenshots it lands within about a factor of two of the true point count, which is the right order for a default; the count is editable and one point per pixel column is always available. A marker series has no automatic count at all: the markers are the answer.
+- **A series drawn in a tint of another series' colour cannot be separated from that series' own antialiased edge.** A light blue is, by colour alone, exactly what a dark blue fading into white paper produces, and the two clusters are then indistinguishable before any spatial test can run. What rescues the ordinary case is that a halo *wraps* the ink it came from; a tint drawn as its own series elsewhere on the chart does not, and is kept. Two series a shade apart in the same hue is the case this does not solve, and the corpus records it as a limit rather than testing it as if it were solved.
+- **Series names read from a legend are cosmetic.** They are matched to a series by the colour the label text is drawn in, adopted only where a legend's entries line up into a column or a row - which is what tells an entry from a chart title drawn in the same colour - and they fall back to `series_n` otherwise. Nothing downstream of the name touches a coordinate, and every name stays editable.
 
