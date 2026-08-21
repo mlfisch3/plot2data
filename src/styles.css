@@ -313,6 +313,14 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* A pressed toggle has to look pressed, or the mode it puts the chart into is
+   invisible until the next drag does something unexpected. */
+.panel-tools button[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
 .panel-tools label {
   margin: 0;
   white-space: nowrap;
@@ -689,9 +697,26 @@ label {
 
 /* The chart panel hosts a charting library rather than a canvas of our own. */
 .chart-host {
+  position: relative;
   width: 100%;
   height: clamp(220px, 42vw, 400px);
   background: var(--panel-paper);
+}
+
+/* Only present while box-zoom mode is on; it takes the pointer events so the
+   chart's own pan and pinch never see them and cannot fight the selection. */
+.chart-band-catcher {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.chart-band {
+  position: absolute;
+  background: rgba(20, 98, 184, 0.16);
+  border: 1px solid rgba(20, 98, 184, 0.7);
+  pointer-events: none;
 }
 
 /* ---------- data table ---------- */

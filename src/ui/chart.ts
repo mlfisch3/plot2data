@@ -37,7 +37,6 @@ import {
   DataZoomInsideComponent,
   GridComponent,
   LegendComponent,
-  ToolboxComponent,
   TooltipComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -52,7 +51,6 @@ echarts.use([
   GridComponent,
   TooltipComponent,
   LegendComponent,
-  ToolboxComponent,
   DataZoomInsideComponent,
   CanvasRenderer,
 ]);
@@ -112,6 +110,8 @@ export class ReplotChart {
   private data: ChartData | null = null;
   /** Guards against echoing a window we were just handed back out again. */
   private applying = false;
+  /** The overlay that takes pointer events while box-zoom mode is on. */
+  private catcher: HTMLDivElement | null = null;
 
   constructor(
     readonly host: HTMLElement,
@@ -160,12 +160,87 @@ export class ReplotChart {
   }
 
   resetView(): void {
-    const data = this.data;
-    if (!data) return;
-    this.applyWindow(fullExtent(data));
+    const chart = this.chart;
+    if (!chart) return;
+    for (const dataZoomIndex of [0, 1]) {
+      chart.dispatchAction({ type: 'dataZoom', dataZoomIndex, start: 0, end: 100 });
+    }
+  }
+
+  /**
+   * Turn drag-to-select-a-region on or off.
+   *
+   * A finger cannot hover, so a chart that both pans on drag and selects on
+   * drag needs a mode, and on a touch screen that mode has to be a control the
+   * user can see and hit - which is why this is driven from a button below the
+   * panel rather than from the library's own 16 px toolbox icon.
+   *
+   * The band is drawn on a plain div laid over the chart, which also takes the
+   * pointer events while the mode is on, so the library's pan and pinch never
+   * see them and cannot fight the selection. The corners are converted back to
+   * data through the chart's own pixel mapping, so the region selected is
+   * exactly the region zoomed to.
+   */
+  setBoxZoom(active: boolean): void {
+    this.catcher?.remove();
+    this.catcher = null;
+    if (!active || !this.chart) return;
+    const catcher = document.createElement('div');
+    catcher.className = 'chart-band-catcher';
+    const band = document.createElement('div');
+    band.className = 'chart-band';
+    band.hidden = true;
+    catcher.append(band);
+    this.host.append(catcher);
+    this.catcher = catcher;
+
+    let from: { x: number; y: number } | null = null;
+    const local = (event: PointerEvent) => {
+      const rect = catcher.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+    catcher.addEventListener('pointerdown', (event) => {
+      from = local(event);
+      catcher.setPointerCapture(event.pointerId);
+      band.hidden = false;
+      event.preventDefault();
+    });
+    catcher.addEventListener('pointermove', (event) => {
+      if (!from) return;
+      const to = local(event);
+      band.style.left = `${Math.min(from.x, to.x)}px`;
+      band.style.top = `${Math.min(from.y, to.y)}px`;
+      band.style.width = `${Math.abs(to.x - from.x)}px`;
+      band.style.height = `${Math.abs(to.y - from.y)}px`;
+    });
+    const finish = (event: PointerEvent) => {
+      const start = from;
+      from = null;
+      band.hidden = true;
+      if (!start || !this.chart) return;
+      const to = local(event);
+      // A tap is not a selection. Anything under a finger's width is one.
+      if (Math.abs(to.x - start.x) < 12 || Math.abs(to.y - start.y) < 12) return;
+      const a = this.chart.convertFromPixel({ gridIndex: 0 }, [start.x, start.y]) as number[];
+      const b = this.chart.convertFromPixel({ gridIndex: 0 }, [to.x, to.y]) as number[];
+      if (!a || !b || !Number.isFinite(a[0] + a[1] + b[0] + b[1])) return;
+      this.applyWindow({
+        x0: Math.min(a[0], b[0]),
+        x1: Math.max(a[0], b[0]),
+        y0: Math.min(a[1], b[1]),
+        y1: Math.max(a[1], b[1]),
+      });
+    };
+    catcher.addEventListener('pointerup', finish);
+    catcher.addEventListener('pointercancel', () => {
+      from = null;
+      band.hidden = true;
+    });
   }
 
   dispose(): void {
+    this.catcher?.remove();
+    this.catcher = null;
     this.chart?.dispose();
     this.chart = null;
   }
@@ -221,11 +296,17 @@ export class ReplotChart {
     };
   }
 
+  /** Move the chart to a window, in data units. */
   private applyWindow(w: DataWindow): void {
     const chart = this.chart;
     if (!chart) return;
     chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, startValue: w.x0, endValue: w.x1 });
     chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 1, startValue: w.y0, endValue: w.y1 });
+  }
+
+  /** True while drag-to-select is on. */
+  get boxZoom(): boolean {
+    return this.catcher !== null;
   }
 
   private option(data: ChartData): echarts.EChartsCoreOption {
@@ -263,8 +344,7 @@ export class ReplotChart {
         type: 'scroll',
         top: 4,
         left: 6,
-        // Room for the toolbox, which lives in the same strip on the right.
-        right: 68,
+        right: 6,
         textStyle: { color: theme.text, fontSize: 11 },
         inactiveColor: theme.axis,
         // Names read off a chart's legend are sentences, and five of them do
@@ -273,20 +353,6 @@ export class ReplotChart {
         formatter: (name: string) => (name.length > 26 ? `${name.slice(0, 25)}…` : name),
         tooltip: { show: true },
         data: data.series.map((s) => s.name),
-      },
-      toolbox: {
-        right: 8,
-        top: 2,
-        itemSize: 16,
-        iconStyle: { borderColor: theme.text },
-        feature: {
-          dataZoom: {
-            yAxisIndex: 'all',
-            title: { zoom: 'Drag a box to zoom', back: 'Undo zoom' },
-            brushStyle: { color: 'rgba(20,98,184,0.16)', borderColor: 'rgba(20,98,184,0.7)' },
-          },
-          restore: { title: 'Reset' },
-        },
       },
       tooltip: {
         trigger: 'axis',

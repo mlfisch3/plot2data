@@ -169,9 +169,10 @@ app.innerHTML = `
         </header>
         <div class="chart-host" id="replot" role="img" aria-label="The extracted data re-plotted"></div>
         <div class="panel-tools">
-          <label class="check-row"><input type="checkbox" id="link-zoom" checked /> Share zoom across panels</label>
-          <span class="panel-note">Drag to pan, pinch or scroll to zoom, or pick the box tool to zoom into a region.</span>
+          <button id="box-zoom" aria-pressed="false">Zoom to a box</button>
           <button id="replot-fit">Reset zoom</button>
+          <label class="check-row"><input type="checkbox" id="link-zoom" checked /> Share zoom across panels</label>
+          <span class="panel-note" id="replot-hint">Drag to pan, pinch or scroll to zoom.</span>
         </div>
       </section>
 
@@ -633,6 +634,17 @@ document.getElementById('zoom-out')!.addEventListener('click', () => {
 document.getElementById('replot-fit')!.addEventListener('click', () => {
   chart.resetView();
   mirrorZoom(() => chart.visibleWindow(), 'chart');
+});
+const boxZoomBtn = document.getElementById('box-zoom') as HTMLButtonElement;
+const replotHint = document.getElementById('replot-hint')!;
+let boxZoom = false;
+boxZoomBtn.addEventListener('click', () => {
+  boxZoom = !boxZoom;
+  chart.setBoxZoom(boxZoom);
+  boxZoomBtn.setAttribute('aria-pressed', String(boxZoom));
+  replotHint.textContent = boxZoom
+    ? 'Drag a box across the chart to zoom into it.'
+    : 'Drag to pan, pinch or scroll to zoom.';
 });
 document.getElementById('overlay-fit')!.addEventListener('click', () => overlay.viewport.resetView());
 
