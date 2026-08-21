@@ -87,6 +87,8 @@ export interface AnalysedSeries {
   candidate: SeriesCandidate;
   /** Number of components discarded as in-plot text or stray marks. */
   rejectedComponents: number;
+  /** Kept blobs wider than one marker: several markers drawn touching. */
+  mergedComponents: number;
 }
 
 /** The reading of one analysed series under a given mode. */
@@ -290,6 +292,15 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
       markerWidthPx: 0,
     };
 
+    // Markers drawn close enough to touch come back as one blob and so as one
+    // point. That is the honest reading of the ink - there is nothing in the
+    // picture that says where one marker ends and the next begins - but it is
+    // worth saying out loud, because it is why a dense scatter reports fewer
+    // points than were plotted.
+    const mergedComponents = selection.kept.filter(
+      (c) => c.bounds.x1 - c.bounds.x0 + 1 > marker.markerWidthPx * 1.6,
+    ).length;
+
     const autoMode: ExtractionMode = selection.markerLike ? 'marker' : 'curve';
     const mode = options.mode ?? autoMode;
     if (mode === 'curve' && curve.points.length < 2) return;
@@ -302,8 +313,24 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
       components: selection.kept,
       candidate,
       rejectedComponents: selection.rejected.length,
+      mergedComponents,
     });
   });
+
+  const mergedTotal = series.reduce(
+    (n, s) => n + (s.autoMode === 'marker' ? s.mergedComponents : 0),
+    0,
+  );
+  if (mergedTotal > 0) {
+    warnings.push({
+      code: 'markers-merged',
+      level: 'info',
+      message:
+        `${mergedTotal} blob${mergedTotal > 1 ? 's are' : ' is'} wider than a single marker: ` +
+        'markers drawn close enough to touch come back as one point at their shared centre. ' +
+        'The count reported is the count found, never an extrapolation.',
+    });
+  }
 
   if (series.length === 0) {
     warnings.push({

@@ -709,9 +709,26 @@ export function selectDataComponents(
     // move the ink-weighted figure, and the floor holds.
     const inkTypical = weightedMedian(areas, areas);
     const floor = Math.max(medianArea * 0.2, inkTypical * 0.05);
-    const kept = metrics
-      .filter((m) => m.c.area >= floor && m.c.area <= medianArea * 8)
+    const sized = metrics.filter((m) => m.c.area >= floor && m.c.area <= medianArea * 8);
+    // What a marker looks like, measured on the blobs that are already the
+    // right size to be one.
+    const typicalH = medianNum(sized.map((m) => m.h));
+    const typicalW = medianNum(sized.map((m) => m.w));
+    // A marker *is* its cross-section, and two things the size window gets
+    // wrong are cross-section problems. A tick mark drawn inwards from the
+    // frame lands inside the plot area and has the area of a small marker, but
+    // it is a two-pixel sliver; on the microprocessor chart four of them were
+    // exported as black data points. And a row of markers drawn close enough
+    // to touch is one blob of several markers' area - real data, thrown away
+    // whole - which is recognisable because it is still exactly one marker
+    // tall.
+    const kept = sized
+      .filter((m) => m.h >= typicalH * 0.35 && m.w >= typicalW * 0.35)
       .map((m) => m.c);
+    for (const m of metrics) {
+      if (m.c.area <= medianArea * 8 || m.c.area < floor) continue;
+      if (m.h <= typicalH * 1.8 && m.w >= typicalW) kept.push(m.c);
+    }
     return { kept, rejected: components.filter((c) => !kept.includes(c)), markerLike: true };
   }
 
