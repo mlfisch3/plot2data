@@ -72,6 +72,19 @@ export function csvHeader(
       '# mode: curve - rows are a RESAMPLING OF THE DRAWN CURVE, not the original sample points',
     );
   }
+  // With both kinds in one file, saying which is which per series is the only
+  // way a reader can tell a measured x from a grid position.
+  if (modes.size > 1) {
+    for (const s of series) {
+      lines.push(
+        `#   ${s.name}: ${s.mode}${
+          s.mode === 'marker'
+            ? ` - ${s.points.length} markers, on their own x columns`
+            : ' - resampled onto the shared x column'
+        }`,
+      );
+    }
+  }
 
   const rect = analysis.frame.rect;
   lines.push(`# ${describeAxis(cal.x, 'x', analysis.units.x, [rect.x0, rect.x1])}`);
@@ -148,32 +161,37 @@ export function compact(v: number): string {
 export function toTable(series: DataSeries[]): { columns: string[]; rows: Array<Array<number | null>> } {
   if (series.length === 0) return { columns: [], rows: [] };
 
+  // A chart may carry both kinds at once, and then neither answer alone is
+  // right: the curves still belong under one shared x column, and forcing the
+  // markers onto that grid would move them off the positions they were drawn
+  // at. So both happen - one x column for the curves, a pair of columns for
+  // each marker series - and the column names say which is which.
+  const curves = series.filter((s) => s.mode === 'curve');
+  const markers = series.filter((s) => s.mode === 'marker');
   const shared =
-    series.every((s) => s.mode === 'curve') &&
-    series.every((s) => s.points.length === series[0].points.length) &&
-    series.every((s) => s.points.every((p, i) => Math.abs(p.x - series[0].points[i].x) < 1e-9));
-
-  if (shared) {
-    const columns = ['x', ...series.map((s) => s.name)];
-    const rows = series[0].points.map((_, i) => [
-      cellOf(series[0].points[i].x),
-      ...series.map((s) => cellOf(s.points[i].y)),
-    ]);
-    return { columns, rows };
-  }
+    curves.length > 0 &&
+    curves.every((s) => s.points.length === curves[0].points.length) &&
+    curves.every((s) => s.points.every((p, i) => Math.abs(p.x - curves[0].points[i].x) < 1e-9));
 
   const columns: string[] = [];
-  for (const s of series) columns.push(`${s.name}_x`, `${s.name}_y`);
+  const columnsOf: Array<(row: number) => number | null> = [];
+  if (shared) {
+    columns.push('x');
+    columnsOf.push((i) => (i < curves[0].points.length ? cellOf(curves[0].points[i].x) : null));
+    for (const s of curves) {
+      columns.push(s.name);
+      columnsOf.push((i) => (i < s.points.length ? cellOf(s.points[i].y) : null));
+    }
+  }
+  for (const s of shared ? markers : series) {
+    columns.push(`${s.name}_x`, `${s.name}_y`);
+    columnsOf.push((i) => (i < s.points.length ? cellOf(s.points[i].x) : null));
+    columnsOf.push((i) => (i < s.points.length ? cellOf(s.points[i].y) : null));
+  }
+
   const height = Math.max(...series.map((s) => s.points.length));
   const rows: Array<Array<number | null>> = [];
-  for (let i = 0; i < height; i++) {
-    const row: Array<number | null> = [];
-    for (const s of series) {
-      const p = s.points[i];
-      row.push(p ? cellOf(p.x) : null, p ? cellOf(p.y) : null);
-    }
-    rows.push(row);
-  }
+  for (let i = 0; i < height; i++) rows.push(columnsOf.map((get) => get(i)));
   return { columns, rows };
 }
 

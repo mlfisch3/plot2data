@@ -90,6 +90,7 @@ export {
 export {
   analyse,
   buildSeries,
+  resolveModes,
   sharedSpan,
   suggestPointCount,
   tracedAs,
@@ -97,6 +98,7 @@ export {
   type Analysis,
   type AnalysedSeries,
   type BuildOptions,
+  type ModeChoice,
   type Warning,
   type WarningCode,
 } from './pipeline.ts';

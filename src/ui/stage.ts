@@ -1,6 +1,11 @@
 /**
  * The interactive canvas: the image, the crop rectangle, and after extraction
- * the detected frame, the traced series and the four draggable anchors.
+ * the detected frame, the detected ticks and the four draggable anchors.
+ *
+ * What it deliberately does *not* draw is the extraction. This is the one clean
+ * view of the source the user has, and the check the tool is built around is
+ * comparing it against the panels below; drawing our own points on top of the
+ * chart's markers destroys the thing being compared against.
  *
  * It is driven by pointer events throughout, so a finger, a stylus and a mouse
  * take exactly the same path through the code. Two things follow from being
@@ -70,7 +75,6 @@ export class Stage {
   private cropRect: Rect | null = null;
   private analysis: Analysis | null = null;
   private calibration: Calibration | null = null;
-  private visible = new Set<number>();
   private mode: 'crop' | 'anchors' = 'crop';
   private gesture: Gesture | null = null;
   private hover: AnchorId | CropHandle | null = null;
@@ -109,17 +113,15 @@ export class Stage {
     this.resize();
   }
 
-  setAnalysis(analysis: Analysis | null, calibration: Calibration | null, visible: Set<number>): void {
+  setAnalysis(analysis: Analysis | null, calibration: Calibration | null): void {
     this.analysis = analysis;
     this.calibration = calibration;
-    this.visible = visible;
     this.mode = analysis ? 'anchors' : 'crop';
     this.render();
   }
 
-  setCalibration(calibration: Calibration, visible: Set<number>): void {
+  setCalibration(calibration: Calibration): void {
     this.calibration = calibration;
-    this.visible = visible;
     this.render();
   }
 
@@ -692,52 +694,11 @@ export class Stage {
       ctx.fillRect(s.x - (t.value !== undefined ? 9 : 5), s.y - 0.75, t.value !== undefined ? 9 : 5, 1.5);
     }
 
-    // Traced series.
-    analysis.series.forEach((series, i) => {
-      if (!this.visible.has(i)) return;
-      const colour = series.traced.colour;
-      const stroke = `rgb(${Math.round(colour.r)},${Math.round(colour.g)},${Math.round(colour.b)})`;
-      const points = series.traced.points;
-      // The overlay has to be visibly *different* from the ink underneath it,
-      // otherwise the user cannot tell a good trace from no trace at all.
-      if (series.traced.mode === 'marker') {
-        ctx.lineWidth = 2;
-        for (const p of points) {
-          const s = this.toScreen(p.px + series.mask.rect.x0, p.py + series.mask.rect.y0);
-          ctx.beginPath();
-          ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
-          ctx.strokeStyle = stroke;
-          ctx.setLineDash([3, 3]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-      } else {
-        const trace = () => {
-          ctx.beginPath();
-          points.forEach((p, j) => {
-            const s = this.toScreen(p.px + series.mask.rect.x0, p.py + series.mask.rect.y0);
-            if (j === 0) ctx.moveTo(s.x, s.y);
-            else ctx.lineTo(s.x, s.y);
-          });
-          ctx.stroke();
-        };
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 3.5;
-        ctx.globalAlpha = 0.55;
-        trace();
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([5, 5]);
-        trace();
-        ctx.setLineDash([]);
-      }
-    });
+    // Nothing else. The extraction goes over the image in the overlay panel and
+    // nowhere else: drawing it here too costs the user the one clean view of
+    // the source they have, and the captain spent real effort deciding whether
+    // his chart had strange snowflake markers before realising the speckles on
+    // every red triangle were ours.
 
     this.drawAnchors();
     ctx.restore();

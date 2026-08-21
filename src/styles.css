@@ -20,6 +20,19 @@
   --radius: 10px;
   --tap: 44px;
 
+  /* The plot surfaces, deliberately fixed light in both colour schemes.
+     A chart's series colours are chosen by whoever drew the chart, against
+     white paper; re-plotting them on a near-black panel makes a dark blue or a
+     saturated red all but invisible, and the whole point of the middle panel is
+     that it can be compared against the source by eye. The app chrome around
+     them still follows the system setting - see the dark block below, which
+     does not touch these. */
+  --panel-paper: #ffffff;
+  --panel-mat: #eef1f5;
+  --panel-grid: #e4e8ee;
+  --panel-axis: #aeb6c2;
+  --panel-ink: #4a5361;
+
   /* Window insets. The browser fills these from the safe-area values; the
      Android shell overwrites them on documentElement with the real ones,
      because a WebView does not populate env() reliably. */
@@ -228,7 +241,7 @@ body {
 /* ---------- canvas ---------- */
 
 .stage {
-  background: var(--surface);
+  background: var(--panel-mat);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -278,7 +291,7 @@ body {
      canvas: without a definite width the two chase each other on every resize. */
   width: 100%;
   line-height: 0;
-  background: var(--surface-2);
+  background: var(--panel-mat);
 }
 
 .panel-canvas canvas {

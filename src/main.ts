@@ -238,14 +238,23 @@ function mirrorZoom(window_: () => WorldRect, from: 'stage' | 'chart' | 'overlay
   mirroring = false;
 }
 
+/**
+ * The chart panel's palette, fixed light whatever the system asks for.
+ *
+ * The series colours are the chart's own, picked by whoever drew it against
+ * white paper. On a near-black panel a dark blue or a saturated red is
+ * unreadable, and the panel exists to be compared against the source by eye.
+ * The tokens it reads are defined once in `styles.css` and are not redefined
+ * under `prefers-color-scheme: dark`.
+ */
 function chartTheme() {
   const style = getComputedStyle(document.documentElement);
   const pick = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
   return {
-    background: pick('--surface', '#fff'),
-    axis: pick('--border', '#d7dce3'),
-    grid: pick('--surface-2', '#eef1f5'),
-    text: pick('--text-dim', '#5b6472'),
+    background: pick('--panel-paper', '#ffffff'),
+    axis: pick('--panel-axis', '#aeb6c2'),
+    grid: pick('--panel-grid', '#e4e8ee'),
+    text: pick('--panel-ink', '#4a5361'),
   };
 }
 
@@ -281,7 +290,7 @@ function applyStep(phase: Phase): void {
   if (phase === 'ready' && state.analysis) {
     state.phase = 'ready';
     stage.setImage(state.croppedBitmap, null);
-    stage.setAnalysis(state.analysis, state.calibration, state.visible);
+    stage.setAnalysis(state.analysis, state.calibration);
     render();
     resizeAll();
     return;
@@ -648,7 +657,7 @@ async function runExtraction(): Promise<void> {
     pushStep('ready');
     render();
     stage.setImage(state.croppedBitmap, null);
-    stage.setAnalysis(analysis, state.calibration, state.visible);
+    stage.setAnalysis(analysis, state.calibration);
     resizeAll();
     refresh();
   } catch (error) {
@@ -777,7 +786,7 @@ function render(): void {
 function refresh(): void {
   if (state.phase !== 'ready' || !state.analysis || !state.calibration) return;
   const series = currentSeries();
-  stage.setCalibration(state.calibration, state.visible);
+  stage.setCalibration(state.calibration);
   chart.setData({
     series,
     calibration: state.calibration,

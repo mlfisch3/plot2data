@@ -357,6 +357,12 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
   };
 }
 
+/**
+ * A per-series mode choice. `undefined` at an index leaves that series on the
+ * mode the ink itself suggested.
+ */
+export type ModeChoice = ReadonlyArray<ExtractionMode | undefined> | undefined;
+
 export interface BuildOptions {
   calibration?: Calibration;
   resample?: ResampleMode;
@@ -366,18 +372,29 @@ export interface BuildOptions {
   names?: string[];
   /** Series indices to build; the rest are left out entirely. */
   include?: ReadonlySet<number>;
+  /** Per-series mode overrides; see `ModeChoice`. */
+  modes?: ModeChoice;
+}
+
+/** The mode each series will actually be read in. */
+export function resolveModes(analysis: Analysis, modes?: ModeChoice): ExtractionMode[] {
+  return analysis.series.map((s, i) => modes?.[i] ?? s.autoMode);
 }
 
 /** The traced series in image coordinates rather than mask-local ones. */
-function inImageSpace(analysis: Analysis): TracedSeries[] {
-  return analysis.series.map((s) => ({
-    ...s.traced,
-    points: s.traced.points.map((p) => ({
-      ...p,
-      px: p.px + s.mask.rect.x0,
-      py: p.py + s.mask.rect.y0,
-    })),
-  }));
+function inImageSpace(analysis: Analysis, modes?: ModeChoice): TracedSeries[] {
+  const chosen = resolveModes(analysis, modes);
+  return analysis.series.map((s, i) => {
+    const traced = tracedAs(s, chosen[i]);
+    return {
+      ...traced,
+      points: traced.points.map((p) => ({
+        ...p,
+        px: p.px + s.mask.rect.x0,
+        py: p.py + s.mask.rect.y0,
+      })),
+    };
+  });
 }
 
 /**
@@ -388,10 +405,10 @@ function inImageSpace(analysis: Analysis): TracedSeries[] {
  * those are real sample positions and moving them onto a grid would be an
  * invention.
  */
-export function sharedSpan(analysis: Analysis): [number, number] | null {
+export function sharedSpan(analysis: Analysis, modes?: ModeChoice): [number, number] | null {
   let lo = Infinity;
   let hi = -Infinity;
-  for (const s of inImageSpace(analysis)) {
+  for (const s of inImageSpace(analysis, modes)) {
     if (s.mode !== 'curve') continue;
     for (const p of s.points) {
       if (p.px < lo) lo = p.px;
@@ -405,12 +422,14 @@ export function sharedSpan(analysis: Analysis): [number, number] | null {
  * How many points to export, proposed from the drawn line itself.
  *
  * Cheap, and independent of the calibration, so the UI can ask for it once and
- * offer it as a default the user is free to overrule.
+ * offer it as a default the user is free to overrule. It speaks only for the
+ * curve series: a marker series has no count to propose, because the markers
+ * themselves are the answer.
  */
-export function suggestPointCount(analysis: Analysis): SamplingSuggestion {
-  const span = sharedSpan(analysis);
+export function suggestPointCount(analysis: Analysis, modes?: ModeChoice): SamplingSuggestion {
+  const span = sharedSpan(analysis, modes);
   const width = span ? span[1] - span[0] : analysis.frame.rect.x1 - analysis.frame.rect.x0;
-  return suggestSampling(inImageSpace(analysis), width);
+  return suggestSampling(inImageSpace(analysis, modes), width);
 }
 
 /** Apply a calibration to the analysed series. Cheap: safe to call per edit. */
@@ -418,12 +437,12 @@ export function buildSeries(analysis: Analysis, options: BuildOptions = {}): Dat
   const cal = options.calibration ?? analysis.calibration;
   if (!isValid(cal.x) || !isValid(cal.y)) return [];
   const requested = options.resample ?? { kind: 'uniform' as const, count: 100 };
-  const span = sharedSpan(analysis);
+  const span = sharedSpan(analysis, options.modes);
   const mode: ResampleMode =
     requested.kind === 'uniform' && !requested.range && span
       ? { ...requested, range: span }
       : requested;
-  const traced = inImageSpace(analysis);
+  const traced = inImageSpace(analysis, options.modes);
   const out: DataSeries[] = [];
   traced.forEach((s, i) => {
     if (options.include && !options.include.has(i)) return;

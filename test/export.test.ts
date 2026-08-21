@@ -61,6 +61,32 @@ describe('csv', () => {
     expect(table.rows).toHaveLength(50);
   });
 
+  it('gives a marker series its own x columns beside the shared curve grid', async () => {
+    const a = await fixture();
+    // linear-multi is three curves; force the middle one to be read as markers
+    // so the file has to carry both kinds at once.
+    const modes = ['curve', 'marker', 'curve'] as const;
+    const series = buildSeries(a, { resample: { kind: 'uniform', count: 20 }, modes });
+    const table = toTable(series);
+    expect(table.columns[0]).toBe('x');
+    // The two curves stay under the shared x; the marker series brings its own.
+    expect(table.columns).toEqual([
+      'x',
+      'series_1',
+      'series_3',
+      'series_2_x',
+      'series_2_y',
+    ]);
+    const csv = toCsv(a, series);
+    expect(csv).toContain('#   series_2: marker');
+    expect(csv).toContain('#   series_1: curve');
+    // The marker series keeps the positions it was found at rather than being
+    // put on the 20-point grid the curves share.
+    const marker = series.find((s) => s.name === 'series_2')!;
+    expect(marker.points.length).not.toBe(20);
+    expect(table.rows).toHaveLength(Math.max(20, marker.points.length));
+  });
+
   it('honours the delimiter', async () => {
     const a = await fixture();
     const series = buildSeries(a, { resample: { kind: 'uniform', count: 5 } });
