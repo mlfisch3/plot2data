@@ -9,6 +9,10 @@ that hosts the same bundle so a Smart Select crop can be shared to it.
 `README.md` covers running it, the workflow and the engine's public API; `ACCURACY.md` carries the measured error numbers;
 `ANDROID.md` covers the app, sideloading, and what remains unverified without a phone.
 
+Two rules run through the whole design and are worth knowing before changing anything: **a marker series returns one point per drawn
+marker and never an estimate of how many there should be**, and **anything cosmetic - a name read off a legend, a marker shape - must not
+be able to reach a number**.
+
 ## Hard constraints
 
 - **`src/engine/` must stay DOM-free.** It operates on `{width, height, data: Uint8ClampedArray}` RGBA buffers, never on canvases or images.
@@ -32,6 +36,11 @@ asset-loader https origin, which is a normal secure context, so **OCR does run t
 `npm test` runs unit tests *and* `test/accuracy.test.ts`, which extracts every corpus case and asserts hard budgets on **two** metrics,
 so an accuracy regression fails the build. RMS over the whole trace is one; the signed shortfall at the turning points is the other, and
 it exists because RMS hid a defect that lost a third of every spike. Any change to `src/engine/trace.ts` must be judged on both.
+
+`test/halo.test.ts` and `test/legend.test.ts` are the other two that measure rather than assert shapes: the first that no series is
+another's antialiased edge and that every series lands where it was drawn, the second that the names read off a legend change no number.
+Both run against `examples/real/02-microprocessor-log-scatter.png`, which is the chart they exist for.
+
 `npm run accuracy` prints the per-case table; `npm run report` regenerates `ACCURACY.md`.
 
 Corpus images are committed. Regenerate them with `npm run corpus` (headless Chrome via `puppeteer-core`, using the system Chrome)
@@ -59,6 +68,16 @@ re-renders all of them and moves every number in `ACCURACY.md` with them.
   enough all four handles clamp to their edges and two of them land in the same corner.
 - Thresholds that are absolute in pixels or in colour distance break on the next image. Prefer limits relative to the plot size,
   to the strongest ink in the image, or to the label text's own measured size - most bugs here were a constant that did not scale.
+- **A pixel belongs to the series whose blend it is, not the colour it is nearest.** An antialiased pixel is a point on the segment from
+  the paper to its series' ink, so that is what `image.ts:blendDistance` measures it against. Comparing saturated colours instead is wrong
+  in a way that only shows on a chart where one series' fade to white passes near another's colour - dark red fading to white passes
+  squarely through orange - and it put 123 halo specks into the orange series on the microprocessor chart while losing all 54 real markers.
+  The one rival still judged on its solid colour is the **gridline**: grey on white lies exactly on any black series' segment.
+- **A statistic is only as good as the population it is taken over.** The marker size window's median was dragged to 0.79 px by a cloud of
+  sub-pixel dust that outnumbered the markers, so it kept the dust and threw away the data. Anything that sets a scale from a population
+  should be floored or weighted by ink, which dust cannot move.
+- **A marker is its cross-section.** An inward-pointing tick mark inside the plot frame has the area of a small marker and is a two-pixel
+  sliver; a row of markers drawn touching has several markers' area and is still exactly one marker tall. Size alone gets both wrong.
 - **Stroke thickness is measured perpendicular to the path**, as ink area over path length, and the path it divides by is the *corrected*
   trace. Both parts matter: the median vertical extent of a column reads 4x too high on a spiky series, and the raw centroid path cuts
   every corner and comes out a third short, which inflates the width again. Anything derived from thickness - the apex correction, the
@@ -66,9 +85,19 @@ re-renders all of them and moves every number in `ACCURACY.md` with them.
 - A rule that fires *sometimes* has to be gated on something with a wide margin, not on a fine comparison. The mitred-corner correction
   compares the ink's cross-section against the stroke width; gated on a near-equality it fired everywhere and undid most of the peak fix,
   and gated on "is this a sliver or most of a stroke" it fires only where it should.
-- The three result panels share one pan/zoom class (`src/ui/viewport.ts`) over **image pixel coordinates**, which is why the chart panel
-  is drawn in pixels and labelled in data units. A panel with an axis gutter passes an `inset`, or its content is fitted to the wrong box
-  and two linked panels disagree about what they are showing.
+- The stage and overlay panels share one pan/zoom class (`src/ui/viewport.ts`) over **image pixel coordinates**; the chart panel is
+  ECharts and speaks **data units**, and the calibration converts between them (`src/ui/chart.ts`). A shared zoom therefore goes through
+  the same round trip the overlay is built on and cannot drift from what is drawn. The library lives in `src/ui/` only - the engine has no
+  dependencies and `test/engine-purity.test.ts` enforces it.
+- **The three plot panels are fixed light in both colour schemes** (the `--panel-*` tokens, which the dark block does not redefine). The
+  series colours belong to the chart and were chosen against white paper. The chrome around them still follows the system setting - which
+  means anything laid *inside* `.stage` inherits the light mat and needs its own colour.
+- **The original panel draws no extraction.** Frame, ticks and the four anchors only. It is the clean view everything else is compared
+  against, and drawing our points over the chart's own markers cost the captain real time working out whether his chart had strange
+  markers before he realised the speckles were ours.
+- `tools/inline-bundle.ts` must never use a *string* replacement to splice the bundle into the HTML: `String.replace` expands `$&`,
+  `` $` `` and `$'`, and a minified bundle is full of them. It corrupted `dist/index.html` silently, because nothing else in the build
+  looks at what came out. The tool now checks the script it wrote matches the bundle it read.
 - `hidden` loses to any explicit `display` in the stylesheet, and several controls here are laid out with flex and toggled with `hidden`.
   `styles.css` forces `[hidden] { display: none !important }` for that reason.
 
