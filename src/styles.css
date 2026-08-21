@@ -451,6 +451,17 @@ select {
   touch-action: manipulation;
 }
 
+/* A field that is disabled has to look it. The point count is disabled
+   whenever it does not apply - on Automatic, or on a chart with no curves at
+   all - and a greyed value that reads as editable is worse than none. */
+input[type='text']:disabled,
+input[type='number']:disabled,
+select:disabled {
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: not-allowed;
+}
+
 input[type='checkbox'] {
   width: 22px;
   height: 22px;
