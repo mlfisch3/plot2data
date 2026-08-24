@@ -7,7 +7,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 A fully client-side tool that reads numbers back out of plot images: a browser app, and a minimal Kotlin WebView shell in `android/`
 that hosts the same bundle so a Smart Select crop can be shared to it.
 `README.md` covers running it, the workflow and the engine's public API; `ACCURACY.md` carries the measured error numbers;
-`ANDROID.md` covers the app, sideloading, and what remains unverified without a phone.
+`ANDROID.md` covers the app, sideloading, and what was verified on a Galaxy S24 Ultra.
 
 Two rules run through the whole design and are worth knowing before changing anything: **a marker series returns one point per drawn
 marker and never an estimate of how many there should be**, and **anything cosmetic - a name read off a legend, a marker shape - must not

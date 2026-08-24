@@ -51,8 +51,7 @@ tool says so; you type the four marker values in and everything else - detection
 
 `android/` is a minimal Kotlin app that hosts the same bundle in a WebView, so a plot cropped with the S Pen's Smart Select can be
 shared straight to it and come back as a CSV or a workbook. It serves the page over an asset-loader https origin rather than `file://`, which means
-the module build loads and OCR does run there. [ANDROID.md](ANDROID.md) covers building, sideloading, the Smart Select route, and what
-is still unverified until it runs on real hardware.
+the module build loads and OCR does run there. [ANDROID.md](ANDROID.md) covers building, sideloading, and the Smart Select route.
 
 Other scripts:
 

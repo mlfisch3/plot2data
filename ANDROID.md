@@ -158,6 +158,8 @@ Tested on a Galaxy S24 Ultra (SM-S928U1), Android 16, One UI, Chrome/151.0.7922.
   Insets are handled correctly in both orientations, including the punch-hole camera area.
 - Dark mode follows the system setting.
   The three plot panels stay on light paper as intended; the chrome around them follows the dark theme.
+- **Process death and restore.** The app was backgrounded, killed with `am kill`, and relaunched.
+  The image was restored from the cached copy and the crop view reopened with the image loaded and ready for re-extraction.
 
 **From the build, before the device was available:**
 
