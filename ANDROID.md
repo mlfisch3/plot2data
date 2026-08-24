@@ -143,6 +143,13 @@ Tested on a Galaxy S24 Ultra (SM-S928U1), Android 16, One UI, Chrome/151.0.7922.
   The CSV header marks both calibrations `(ocr)` and reports least-squares fits over 5 x-axis and 4 y-axis labels.
 - The app appears in the system share sheet as "plot2data - Extract data from this plot" and accepts shared images via `ACTION_VIEW`
   with content URIs.
+- **`ACTION_SEND` intake (the Smart Select path) was not exercised end to end on the device.**
+  An `am start` test from the shell delivered the intent and the URI was extracted correctly, but `openInputStream` threw
+  `SecurityException` because the shell cannot delegate a MediaStore read grant the way a real share-sheet sender can.
+  The app did show a failure toast rather than failing silently.
+  The code path is identical to the `ACTION_VIEW` path after URI extraction (same `consume` -> `ingest` -> `deliver` pipeline), and
+  `ACTION_VIEW` intake was verified with images that loaded and extracted correctly, so the only untested piece is the URI grant that a
+  real Smart Select share carries. The next step is a manual share from Gallery or Smart Select on the device.
 - `ACTION_CREATE_DOCUMENT` opens the system file picker for both CSV and Excel.
   The CSV file written is a valid CSV with the full header and calibration metadata (2058 bytes for the panel 1 chart).
   The Excel workbook written is a valid `.xlsx` file (10137 bytes) identified by `file` as "Microsoft Excel 2007+" with the correct
