@@ -12,8 +12,29 @@ import type { OcrProvider, OcrResult } from '../engine/labels.ts';
 
 const CHARSET = '0123456789.,-+%$kKMBbnTeEx^';
 
+/** Where the worker, the WASM core and the language data are to be found. */
+interface OcrAssets {
+  workerPath: string;
+  corePath: string;
+  langPath: string;
+}
+
 function assetUrl(path: string): string {
   return new URL(path, document.baseURI).href;
+}
+
+/**
+ * The assets a build that carries them *inside the page* publishes here.
+ *
+ * The review build is one HTML file served from an arbitrary host, so there is
+ * no `tesseract/` directory beside it to ask for: it embeds its copies, unpacks
+ * them into object URLs and hands them over through this. Every other build has
+ * the files next to the page and this is simply absent, so the paths below are
+ * what is used. See `tools/single-file.ts`.
+ */
+function embeddedAssets(): Promise<OcrAssets> | null {
+  const provide = (globalThis as { p2dOcrAssets?: () => Promise<OcrAssets> }).p2dOcrAssets;
+  return typeof provide === 'function' ? provide() : null;
 }
 
 function toCanvas(image: ImageBuffer): HTMLCanvasElement {
@@ -54,10 +75,15 @@ export class BrowserOcr implements OcrProvider {
     }
     this.starting ??= (async () => {
       try {
-        const worker = await withTimeout(createWorker('eng', 1, {
+        const assets: OcrAssets = (await embeddedAssets()) ?? {
           workerPath: assetUrl('./tesseract/worker.min.js'),
           corePath: assetUrl('./tesseract/'),
           langPath: assetUrl('./tessdata'),
+        };
+        const worker = await withTimeout(createWorker('eng', 1, {
+          workerPath: assets.workerPath,
+          corePath: assets.corePath,
+          langPath: assets.langPath,
           // The language data ships expanded; see tools/copy-tesseract.ts.
           gzip: false,
           cacheMethod: 'none',

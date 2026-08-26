@@ -12,3 +12,7 @@ android/local.properties
 android/app/src/main/assets/
 # All of public/ is assembled by `npm run assets` from vendor/ and node_modules.
 public/
+
+# The review page and the module build it is folded from; both generated.
+dist-review/
+review/

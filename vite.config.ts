@@ -12,6 +12,12 @@ import { defineConfig } from 'vitest/config';
 // and its WASM core do too. Inlining would only get in the way, so it is skipped.
 const android = process.env.P2D_ANDROID === '1';
 
+// `P2D_SINGLE=1` builds the review page: the same ES modules, folded afterwards
+// into one file that carries its own OCR (`tools/single-file.ts`). It is served
+// over https like the Android build, so it gets the same shape.
+const single = process.env.P2D_SINGLE === '1';
+const modules = android || single;
+
 export default defineConfig({
   // Relative asset URLs so the built bundle runs from file://, from any static
   // host, and from the asset loader alike.
@@ -19,10 +25,10 @@ export default defineConfig({
   build: {
     target: 'es2022',
     assetsInlineLimit: 0,
-    outDir: android ? 'dist-android' : 'dist',
+    outDir: android ? 'dist-android' : single ? 'dist-review' : 'dist',
     modulePreload: false,
     rollupOptions: {
-      output: android
+      output: modules
         ? { entryFileNames: 'assets/[name].js' }
         : { format: 'iife', inlineDynamicImports: true, entryFileNames: 'assets/[name].js' },
     },

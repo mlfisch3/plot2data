@@ -9,6 +9,17 @@
       content="Extract numerical data from an image of a plot. Runs entirely in your browser."
     />
     <title>plot2data</title>
+    <!--
+      Inline, because the browser asks for /favicon.ico otherwise and every
+      build here is meant to make no request it did not put there itself: from
+      file:// that 404 is noise in the console, and from a host with a strict
+      content-security policy it is a blocked request beside a page that claims
+      to make none. A plot, in the axis colours the calibration markers use.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5 4v24h23' fill='none' stroke='%23495057' stroke-width='2.5' stroke-linecap='round'/%3E%3Cpath d='M8 22l6-8 5 5 8-12' fill='none' stroke='%23f76707' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='14' r='3' fill='%2312b886'/%3E%3C/svg%3E"
+    />
   </head>
   <body>
     <div id="app"></div>
