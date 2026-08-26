@@ -37,15 +37,32 @@ Node 24 and npm 11.
 
 ```sh
 npm install
-npm run dev         # http://localhost:5173
-npm run build       # static bundle in dist/
-npm test            # engine unit tests and the measured-accuracy suite
-npm run android:apk # debug APK in android/app/build/outputs/apk/debug/
+npm run dev          # http://localhost:5173
+npm run build        # static bundle in dist/
+npm run build:review # one reviewable file in review/plot2data-review.html
+npm test             # engine unit tests and the measured-accuracy suite
+npm run android:apk  # debug APK in android/app/build/outputs/apk/debug/
 ```
 
 `dist/index.html` is a single self-contained page: the script and stylesheet are inlined into it, so it runs from any static host
 *and* by opening it straight from the filesystem. Over `file://` the browser refuses to start a web worker, so OCR is skipped and the
 tool says so; you type the four marker values in and everything else - detection, tracing, the panels, the table, export - works exactly the same.
+
+### The review build
+
+`npm run build:review` writes `review/plot2data-review.html`, about 5.1 MB, for sending someone the whole tool to look at rather than
+a screenshot of it.
+It is one file with nothing beside it, and it makes **no request to anywhere**: the app, the stylesheet, tesseract's worker, its WASM
+core and the language data all travel inside the page, gzipped and base64'd, and are unpacked at runtime by the browser's own
+`DecompressionStream`.
+Served over https it is a secure context, so unlike the `file://` build this one is the module build and **OCR works**.
+
+It carries one WASM core rather than the three the other builds ship.
+Tesseract normally picks a SIMD variant from the browser's capabilities, so a missing variant would mean no OCR at all; here the core is
+named exactly, and the plain one is the only variant every browser with WebAssembly can run.
+It is roughly half the speed on a dozen tick-label crops, which is not a wait anyone notices, and it saves 3.9 MB of page.
+Opened from `file://` instead of a server it behaves like `dist/index.html`: no worker, so no OCR, and the marker values are typed in.
+See [`tools/single-file.ts`](tools/single-file.ts).
 
 ## On a phone
 
@@ -254,7 +271,7 @@ Pass `null` and the tool still works fully by placing the four markers by hand.
 ```
 src/engine/     the extraction engine, no DOM and no dependencies
 src/ui/         canvas stage, the result panels, the chart, browser OCR, image IO
-tools/          corpus generator, accuracy report, diagnostics
+tools/          corpus generator, accuracy report, diagnostics, the single-file review build
 test/           unit tests and the measured-accuracy suite
 corpus/         synthetic plots, ground-truth CSVs and case metadata
 examples/real/  the real screenshots used as the acceptance corpus

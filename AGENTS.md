@@ -23,13 +23,16 @@ be able to reach a number**.
   Android app requests no `INTERNET` permission, so it cannot reach the network even by mistake - check with
   `aapt2 dump badging app-debug.apk | grep uses-permission` after touching the manifest or adding a dependency.
 
-## Two builds of the same page
+## Three builds of the same page
 
 `npm run build` produces `dist/`: a classic script inlined into one HTML file, because Chrome blocks ES modules and workers over
 `file://`, so that build has no OCR and says so.
 `npm run build:android` produces `dist-android/` as ES modules and syncs it into the app's assets; the WebView serves it from an
-asset-loader https origin, which is a normal secure context, so **OCR does run there**. Keep both working - `vite.config.ts` switches on
-`P2D_ANDROID`. Build the APK with `npm run android:apk`, which also resolves the SDK and a JDK 17+ (the system JDK is too old for AGP).
+asset-loader https origin, which is a normal secure context, so **OCR does run there**.
+`npm run build:review` produces `review/plot2data-review.html`, the same modules folded into one file that carries its own OCR assets
+gzipped inside the page, for putting on an arbitrary https host with nothing beside it; README and `tools/single-file.ts` say what it
+drops and why. Keep all three working - `vite.config.ts` switches on `P2D_ANDROID` and `P2D_SINGLE`. Build the APK with
+`npm run android:apk`, which also resolves the SDK and a JDK 17+ (the system JDK is too old for AGP).
 
 ## Testing
 
@@ -98,6 +101,14 @@ re-renders all of them and moves every number in `ACCURACY.md` with them.
 - `tools/inline-bundle.ts` must never use a *string* replacement to splice the bundle into the HTML: `String.replace` expands `$&`,
   `` $` `` and `$'`, and a minified bundle is full of them. It corrupted `dist/index.html` silently, because nothing else in the build
   looks at what came out. The tool now checks the script it wrote matches the bundle it read.
+- **A mirror is invisible to any check that compares values.** A left-to-right flip cancels itself out of a desktop-versus-phone
+  comparison, out of a CSV diff, and out of every panel that is symmetric; `test/orientation.test.ts` therefore asserts *direction* on a
+  chart drawn asymmetrically on purpose, on both the exported numbers and the `valueToPixel` round trip the overlay draws with. When
+  chasing a claim that something is mirrored, check the direction invariant over every corpus and example image before reading code:
+  `pixelToValue` across the frame must rise with pixel x, and the round trip back must be exact.
+- **Every view change has to be announced or the three panels drift apart.** They share a zoom by handing each other one window, so a
+  gesture that moves a panel without calling its view-change callback leaves the other two behind - and a panel that keeps its zoom when
+  its content is replaced opens on a region the new image does not have, or on none of it. Both happened.
 - `hidden` loses to any explicit `display` in the stylesheet, and several controls here are laid out with flex and toggled with `hidden`.
   `styles.css` forces `[hidden] { display: none !important }` for that reason.
 
