@@ -88,6 +88,8 @@ export class OverlayPanel {
   private ctx: CanvasRenderingContext2D;
   private data: OverlayData | null = null;
   private probe: { x: number; y: number } | null = null;
+  /** The image the current view was fitted to, so a new one starts fitted. */
+  private fittedTo: ImageBitmap | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement, onUserView?: (v: Viewport) => void) {
     const ctx = canvas.getContext('2d');
@@ -108,6 +110,14 @@ export class OverlayPanel {
 
   setData(data: OverlayData | null): void {
     this.data = data;
+    // A different image is a different world, and the zoom that framed the last
+    // one frames nothing in this one: carried across, the panel opens on the
+    // wrong region of the new plot, or - measured on a smaller image - on no
+    // part of it at all, and shows a blank mat where the overlay should be.
+    if (data && data.bitmap !== this.fittedTo) {
+      this.fittedTo = data.bitmap;
+      this.viewport.fit();
+    }
     this.render();
   }
 

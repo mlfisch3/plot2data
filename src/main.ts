@@ -704,6 +704,10 @@ async function runExtraction(): Promise<void> {
     state.styles = [];
     state.suggestion = suggestPointCount(analysis, currentModes());
     if (state.sampling === 'auto') state.count = state.suggestion.count;
+    // A new extraction is a new plot. Dropping the chart's data first makes it
+    // open on this plot's own extent; kept, it restores the window the previous
+    // image was left at, which on a different axis range shows nothing at all.
+    chart.setData(null);
     state.phase = 'ready';
     pushStep('ready');
     render();

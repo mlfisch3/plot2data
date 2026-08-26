@@ -390,6 +390,11 @@ export class Stage {
       this.view.dy = gesture.startDy + (p.y - gesture.oy);
       this.clampView();
       this.render();
+      // A pan is a view change like any other. Without this the panels below
+      // stay where they were while this one slides away from them, and the
+      // three stop showing the same part of the plot - which is the one thing
+      // a linked zoom exists to guarantee.
+      this.callbacks.onViewChange?.(this.zoomed);
       return;
     }
 
