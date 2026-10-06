@@ -31,6 +31,19 @@ It handles, and is tested on:
 Heavily occluded curves, hand-drawn charts, photos of screens, perspective correction, pie/polar/3D charts, stacked areas and heatmaps.
 Choosing a suitable image is the user's job. If the tool cannot read a plot confidently it says so rather than guessing.
 
+## Download
+
+Signed Android APKs and the standalone single-file review build are published on the project's
+[GitHub Releases page](https://github.com/mlfisch3/plot2data/releases).
+Each release carries two files:
+
+- `plot2data-<x.y.z>.apk` - sideload on a phone (see [ANDROID.md](ANDROID.md) for how, and what the two permissions it holds are for).
+  The app checks the Releases page for a newer version in the background about once a day; the system installer confirms with you before anything is written.
+- `plot2data-review-<x.y.z>.html` - the self-contained review build.
+  Open it in a browser over https from any static host.
+
+Nothing on the Releases page is a tracker, a sign-up or anything with an account: the APK and the review HTML are files you download.
+
 ## Running it
 
 Node 24 and npm 11.

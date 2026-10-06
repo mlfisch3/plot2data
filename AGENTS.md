@@ -18,10 +18,12 @@ be able to reach a number**.
 - **`src/engine/` must stay DOM-free.** It operates on `{width, height, data: Uint8ClampedArray}` RGBA buffers, never on canvases or images.
   The Android app in `android/` runs this engine unchanged inside a WebView, and the whole test suite depends on running it under Node.
   Anything needing the DOM goes in `src/ui/`; OCR reaches the engine through the injected `OcrProvider` interface.
-- **No network at runtime.** The tesseract worker, WASM core and language data are served from the bundle (`npm run assets` assembles
-  all of `public/`, which is generated and ignored in full). `dist/` must stay a self-contained static bundle with relative URLs, and the
-  Android app requests no `INTERNET` permission, so it cannot reach the network even by mistake - check with
-  `aapt2 dump badging app-debug.apk | grep uses-permission` after touching the manifest or adding a dependency.
+- **No network at runtime from the page.** The tesseract worker, WASM core and language data are served from the bundle (`npm run assets`
+  assembles all of `public/`, which is generated and ignored in full). `dist/` must stay a self-contained static bundle with relative URLs.
+  The Android app's **native** side holds `INTERNET` and `REQUEST_INSTALL_PACKAGES` for the auto-update feature only; the WebView itself
+  still refuses every request the asset loader does not serve. Check the permission set after every manifest or dependency change with
+  `aapt2 dump badging app-debug.apk | grep uses-permission` - exactly `INTERNET`, `REQUEST_INSTALL_PACKAGES` and AGP's injected
+  `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, and nothing else.
 
 ## Three builds of the same page
 
@@ -52,6 +54,20 @@ re-renders all of them and moves every number in `ACCURACY.md` with them.
 
 `tools/diagnose.ts` and `tools/diagnose-series.ts` dump what each detection stage found for every corpus and example image;
 `tools/report-one.ts` prints the full analysis and CSV for one image. Reach for these before changing a threshold.
+
+## Release and auto-update
+
+`.github/workflows/ci.yml` runs on every push and PR: vitest (which includes the engine-purity guard and the measured-accuracy suite),
+the three web builds, `android:check` (Android lint with `warningsAsErrors` + the JVM unit tests), and `assembleDebug`.
+`.github/workflows/release.yml` fires on a `v*` tag: builds a release APK signed with the keystore held in GitHub Actions secrets
+(`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` - missing any one fails the release with a message naming it),
+publishes a GitHub Release and attaches both the signed APK and the single-file review build. `RELEASING.md` is the tagging recipe.
+
+The in-app updater (Kotlin only) checks `api.github.com/repos/mlfisch3/plot2data/releases/latest` 24h after the last check and
+on a manual button in the Settings screen (`SettingsActivity`). The checker's host allow-list is a compile-time constant in
+`UpdateHttp.kt` and is pinned by `UpdateHttpTest.kt` - any change there must survive those tests. Comparison is by Android `versionCode`
+when the release body carries a `plot2data: versionCode=N` line (the release workflow writes one from `aapt2 dump badging`), with a
+semver fallback. Downloads go through `DownloadManager` into `cacheDir/update/` and install via `ACTION_VIEW` + `FileProvider`.
 
 ## Sharp edges learned the hard way
 

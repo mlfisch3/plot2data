@@ -100,18 +100,63 @@ Everything beyond that was investigated.
 
 ## What it does, and does not, have access to
 
-- **No network permission.** The app requests nothing, so it cannot reach the network even by mistake. Checked in the built APK: the
-  only `uses-permission` in the merged manifest is `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which AGP injects for
-  androidx's own broadcast receivers, is signature-protected and declared by this app about itself. There is no `INTERNET`.
-  Everything is served from the APK by the asset loader, whose responses are fulfilled from local streams before the network stack is
-  consulted. On top of that, the `WebViewClient` refuses any request the asset loader did not serve, rather than letting it fall through.
+- **Two permissions, each scoped tightly**, and nothing else.
+  Checked in the built APK (`aapt2 dump badging app-debug.apk | grep uses-permission`), the only entries are:
+  - `android.permission.INTERNET` - the Kotlin update checker reaches `api.github.com` for the Releases metadata and `github.com`
+    (plus the `*.githubusercontent.com` CDN the download redirects through) for the APK. **The WebView itself still refuses every request
+    the asset loader does not serve**, so the page cannot touch the network - this permission belongs to the native updater, not the page.
+    See [the auto-update section](#auto-update) below.
+  - `android.permission.REQUEST_INSTALL_PACKAGES` - required to hand a downloaded APK to the system installer with `ACTION_VIEW`.
+    Android still shows the standard "install unknown app" consent prompt before anything is written; this permission does not grant a
+    silent install.
+  - `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which AGP injects for androidx's own broadcast receivers.
+    Signature-protected and declared by this app about itself.
 - No file access from the WebView (`allowFileAccess` and `allowContentAccess` are off); universal access from file URLs is never enabled.
 - A shared image is **copied into the app's cache** and served back to the page over the asset-loader origin.
   A share-sheet URI grant dies with the task that received it, so a copy is what survives the process being killed - and it means the
   WebView never needs content access.
-- The only thing that leaves the app is a CSV or a workbook you explicitly save or share. A workbook crosses the bridge base64 encoded,
-  because a zip cannot survive the trip as a JavaScript string; the page decides what to export, but not what type the phone files it as -
-  anything but the known workbook type is saved as a CSV.
+- The only thing that leaves the app is a CSV or a workbook you explicitly save or share, or a check against the GitHub Releases API.
+  A workbook crosses the bridge base64 encoded, because a zip cannot survive the trip as a JavaScript string; the page decides what to
+  export, but not what type the phone files it as - anything but the known workbook type is saved as a CSV.
+
+## Auto-update
+
+The app checks the project's [GitHub Releases page](https://github.com/mlfisch3/plot2data/releases) for a newer version.
+It is the only network call the app ever makes, and it is strictly scoped: the checker refuses any URL not on `api.github.com`,
+`github.com` or `*.githubusercontent.com` at the OkHttp interceptor level
+(see `UpdateHttp.kt` and `UpdateHttpTest.kt`), and the download URL has to be a release-asset path for this very repo.
+
+### Flow
+
+1. **On launch**, if the last successful check is more than 24 hours ago, the app hits
+   `GET https://api.github.com/repos/mlfisch3/plot2data/releases/latest` in a background coroutine. Nothing more.
+2. **A cog in the page's masthead** opens the native settings screen, which has a "Check for updates now" button and the auto toggle.
+   This path works offline-friendly: a background check that cannot reach GitHub makes no noise; a manual check that fails shows one line
+   that says so.
+3. **If a newer version exists**, Android shows a dialog with the installed and available versions and the first few lines of the release
+   notes. The two actions are "Install" and "Later"; no auto-install, ever.
+4. **Install** downloads the APK with Android's `DownloadManager` into the app's cache dir (`cacheDir/update/`) and hands the completed file
+   to `ACTION_VIEW` with the system installer MIME type and a `FileProvider` URI.
+   Android shows its standard "install unknown app" prompt before anything is written.
+5. **Comparison is by `versionCode`**, not by name. The release workflow writes a tagged line `plot2data: versionCode=N` into the release
+   body for the checker to read; semver on the tag is the fallback. A downgrade is never offered.
+6. **Rate-limited** to one background check per 24 hours, cached across launches, well under the 60/hour unauthenticated GitHub limit.
+   The manual button sits on top of that gate.
+
+### Signatures and upgrades
+
+An APK installs over a previous version only when the two are signed by the same key.
+The release workflow signs every tagged APK with the keystore held in `secrets.KEYSTORE_B64` (plus `KEYSTORE_PASSWORD`, `KEY_ALIAS` and
+`KEY_PASSWORD`), so one chain of signed APKs upgrades cleanly from v0.2.0 onward.
+The debug APK from a local `npm run android:apk` is signed with the AGP debug keystore and is a **different app to Android**: it will
+not install over a release-signed version and vice versa.
+See [RELEASING.md](RELEASING.md) for how the release keystore is generated and uploaded.
+
+### Turning it off
+
+Open the cog in the masthead, flip **Check for updates automatically**.
+The 24h background check stops immediately; the manual button in the same screen still works.
+There is no notification channel to disable: nothing is posted outside the dialog shown on the first launch after a new release.
 
 ## Phone behaviour
 
