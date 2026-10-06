@@ -7,4 +7,27 @@
     <string name="csv_saved">CSV saved</string>
     <string name="csv_save_failed">Could not write the CSV</string>
     <string name="image_read_failed">Could not read that image</string>
+
+    <!-- Settings / auto-update -->
+    <string name="settings_title">plot2data settings</string>
+    <string name="settings_updates_heading">Updates</string>
+    <string name="settings_updates_description">plot2data can check the GitHub Releases page for a newer version. No account or telemetry; it fetches the release metadata only when it needs to.</string>
+    <string name="settings_auto_check_label">Check for updates automatically</string>
+    <string name="settings_check_now">Check for updates now</string>
+    <string name="settings_current_version">Installed version: %1$s</string>
+    <string name="settings_last_checked_never">Last checked: never</string>
+    <string name="settings_last_checked_at">Last checked: %1$s</string>
+    <string name="settings_update_notice">Updates download in the background, then the system installer asks for your confirmation before anything is installed.</string>
+
+    <string name="update_available_title">plot2data %1$s is available</string>
+    <string name="update_available_message">You have %1$s. Install %2$s now? The update downloads first and Android will ask for your confirmation before anything is installed.</string>
+    <string name="update_install_now">Install</string>
+    <string name="update_install_later">Later</string>
+    <string name="update_download_title">plot2data update</string>
+    <string name="update_download_description">Downloading plot2data %1$s</string>
+    <string name="update_download_started">Download started</string>
+    <string name="update_download_failed">Could not download the update</string>
+    <string name="update_install_unsupported">This device cannot install the APK; download it from the Releases page.</string>
+    <string name="update_check_failed_toast">Could not reach GitHub</string>
+    <string name="update_up_to_date_toast">You already have the latest version</string>
 </resources>

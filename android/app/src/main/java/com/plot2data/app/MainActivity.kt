@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var images: SharedImageStore
     private lateinit var webView: WebView
+    private lateinit var updates: UpdateManager
     private val io = Executors.newSingleThreadExecutor()
 
     /** Set once the page has called back to say its receiver is installed. */
@@ -94,8 +95,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         images = SharedImageStore(this)
+        updates = UpdateManager(this)
 
         installWebView()
+        maybeRunStartupUpdateCheck()
 
         onBackPressedDispatcher.addCallback(this) {
             if (webView.canGoBack()) {
@@ -136,8 +139,48 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         io.shutdown()
+        updates.dispose()
         webView.destroy()
         super.onDestroy()
+    }
+
+    /* --------------------------------------------------------------- updates */
+
+    /**
+     * Hit the GitHub Releases API in the background if the user has not turned
+     * off auto-check and the 24h gate is open. The result is silent on failure
+     * - a background check that fails has nothing to say the user did not know
+     * already - but shows a dialog when a newer version is available.
+     */
+    private fun maybeRunStartupUpdateCheck() {
+        if (!updates.shouldRunStartupCheck()) return
+        updates.checkInBackground { result ->
+            if (result is UpdateResult.Available) showUpdateDialog(result.info)
+        }
+    }
+
+    private fun showUpdateDialog(info: UpdateInfo) {
+        if (isFinishing || isDestroyed) return
+        val notesExcerpt = info.notes.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .take(10)
+            .joinToString("\n")
+        val message = buildString {
+            append(getString(R.string.update_available_message, BuildConfig.VERSION_NAME, info.versionName))
+            if (notesExcerpt.isNotEmpty()) {
+                append("\n\n")
+                append(notesExcerpt)
+            }
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_available_title, info.versionName))
+            .setMessage(message)
+            .setPositiveButton(R.string.update_install_now) { _, _ ->
+                updates.downloadAndInstall(info) {}
+            }
+            .setNegativeButton(R.string.update_install_later, null)
+            .show()
     }
 
     /* -------------------------------------------------------------- webview */
@@ -432,6 +475,16 @@ class MainActivity : ComponentActivity() {
         fun shareBinary(name: String?, base64: String?, mime: String?) = onPage {
             val bytes = decode(base64) ?: return@onPage
             shareFile(Exports.safeFileName(name, extensionFor(mime)), bytes, mimeFor(mime))
+        }
+
+        /** Opens the native settings/updates screen. The page shows a cog that calls here. */
+        @JavascriptInterface
+        fun openUpdateSettings() = onPage {
+            try {
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            } catch (e: ActivityNotFoundException) {
+                toast(R.string.update_download_failed)
+            }
         }
 
         private fun decode(base64: String?): ByteArray? {

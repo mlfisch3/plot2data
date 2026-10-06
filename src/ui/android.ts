@@ -41,6 +41,8 @@ interface NativeBridge {
    */
   saveBinary?(name: string, base64: string, mime: string): void;
   shareBinary?(name: string, base64: string, mime: string): void;
+  /** Opens the native settings screen (auto-update toggle, check-for-updates). */
+  openUpdateSettings?(): void;
 }
 
 declare global {
@@ -57,6 +59,14 @@ const native: NativeBridge | null = window.Plot2DataAndroid ?? null;
 
 /** True when the page is running inside the Android shell. */
 export const onAndroid = native !== null;
+
+/**
+ * Open the Android settings screen (auto-update toggle, check-for-updates).
+ * No-op anywhere else; the caller only shows the cog when [onAndroid] is true.
+ */
+export function openUpdateSettings(): void {
+  native?.openUpdateSettings?.();
+}
 
 /**
  * Publish the receiver the shell calls into, then tell it we are listening.
