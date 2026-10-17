@@ -272,7 +272,10 @@ function columnValues(
   // A turn has to be visible across at least the width of the stroke: the tip of
   // a spike drawn with a 6 px pen is 6 px of columns that all reach the same
   // height, and a one-column comparison would see a plateau rather than a peak.
-  const reach = Math.max(2, Math.round(t));
+  // Reach a little past the stroke width so a plateau peak that spans several
+  // stroke-widths - the retail-sales chart carries 6-column plateaus at the
+  // top of its tallest spikes - still shows a rise on both sides.
+  const reach = Math.max(3, Math.round(t * 2));
 
   for (let x = 0; x < runs.length; x++) {
     const run = runs[x];

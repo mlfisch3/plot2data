@@ -526,7 +526,10 @@ async function evaluate(exp: Expectation, options: AnalyseOptions): Promise<Eval
   };
   try {
     const analysis = await analyse(img, options);
-    const series = buildSeries(analysis, { resample: { kind: 'uniform', count: 200 } });
+    // Native resampling so the overlay shows what the engine actually traced,
+    // one point per column: a uniform resample at 200 points drops peak-tip
+    // columns on a dense monthly chart and makes a clean trace look clipped.
+    const series = buildSeries(analysis, { resample: { kind: 'native' } });
     const cal = analysis.calibration;
     const xLo = Math.min(cal.x.a.value, cal.x.b.value) * cal.x.multiplier + cal.x.offset;
     const xHi = Math.max(cal.x.a.value, cal.x.b.value) * cal.x.multiplier + cal.x.offset;
