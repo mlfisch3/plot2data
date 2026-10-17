@@ -12,7 +12,7 @@ import type { Analysis } from './pipeline.ts';
 import { writeXlsx, type Cell } from './xlsx.ts';
 import type { Calibration, DataSeries } from './types.ts';
 
-export const TOOL_VERSION = '0.1.0';
+export const TOOL_VERSION = '0.2.0';
 
 /** Delimiters offered by the UI. Anything else a caller passes is used as-is. */
 export const DELIMITERS = {

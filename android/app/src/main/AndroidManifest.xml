@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  plot2data requests no permissions, and that is deliberate: without INTERNET it
-  cannot reach the network even by mistake. Everything it serves comes from
-  WebViewAssetLoader, whose responses are fulfilled from local streams before the
-  network stack is ever consulted.
+  Two permissions, each scoped tightly:
 
-  The merged manifest does carry one entry AGP injects on our behalf,
-  <applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION, which androidx
-  declares about itself at signature protection level and grants nobody anything.
+  - INTERNET lets the Kotlin side reach api.github.com for the release-metadata
+    check and github.com (plus the githubusercontent asset host it redirects to)
+    for the APK download. The WebView refuses every request the asset loader
+    does not serve, so the page itself cannot touch the network - this
+    permission belongs to the native update checker and nothing else.
+  - REQUEST_INSTALL_PACKAGES is required to hand a downloaded APK to the
+    system installer; Android still shows the standard "install unknown app"
+    consent prompt before anything is written.
+
+  The merged manifest also carries <applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION,
+  which AGP injects on our behalf; it is signature-protected and declared by
+  this app about itself.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="false"
@@ -58,7 +67,16 @@
             </intent-filter>
         </activity>
 
-        <!-- Hands a written CSV to another app without granting it anything else. -->
+        <!-- The in-app settings screen for the auto-update feature. -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_title"
+            android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.Plot2Data" />
+
+        <!-- Hands a written CSV, or a downloaded update APK, to another app
+             without granting it anything else. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

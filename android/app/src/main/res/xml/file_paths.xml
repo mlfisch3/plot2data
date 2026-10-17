@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Only the exported-CSV scratch directory is reachable through the provider. -->
+    <!-- Only the exported-CSV scratch directory is reachable through the
+         provider; the update cache dir sits beside it, so the installer intent
+         can receive a URI to the downloaded APK without any other scope being
+         granted. -->
     <cache-path name="csv" path="csv/" />
+    <cache-path name="update" path="update/" />
 </paths>

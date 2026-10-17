@@ -55,6 +55,7 @@ import {
   fetchIncoming,
   installHost,
   onAndroid,
+  openUpdateSettings,
   CSV_MIME,
   XLSX_MIME,
   type IncomingImage,
@@ -140,6 +141,14 @@ app.innerHTML = `
   <header class="masthead">
     <h1>plot2data</h1>
     <p>Read the numbers back out of a plot image. Everything runs on this device; nothing is uploaded.</p>
+    <button
+      id="open-settings"
+      class="masthead-settings"
+      type="button"
+      aria-label="Open plot2data settings"
+      title="Settings"
+      hidden
+    >&#9881;</button>
   </header>
   <div class="layout">
     <div class="stage-column">
@@ -210,6 +219,13 @@ app.innerHTML = `
 
 const intake = document.getElementById('intake')!;
 const stageWrap = document.getElementById('stage-wrap') as HTMLDivElement;
+const settingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
+if (onAndroid) {
+  settingsBtn.hidden = false;
+  settingsBtn.addEventListener('click', () => {
+    openUpdateSettings();
+  });
+}
 const panel = document.getElementById('panel')!;
 const filenameEl = document.getElementById('filename')!;
 const extractBtn = document.getElementById('extract') as HTMLButtonElement;

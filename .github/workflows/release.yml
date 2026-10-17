@@ -1,0 +1,209 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4.2.2
+        with:
+          # Need the previous tag so release notes can diff against it.
+          fetch-depth: 0
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) version="${tag#v}" ;;
+            *)  echo "Tag '$tag' is not a v* tag"; exit 1 ;;
+          esac
+          echo "tag=$tag"             >> "$GITHUB_OUTPUT"
+          echo "version=$version"     >> "$GITHUB_OUTPUT"
+          echo "apk=plot2data-$version.apk"           >> "$GITHUB_OUTPUT"
+          echo "review=plot2data-review-$version.html" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The ubuntu-24.04 runner ships with the Android SDK pre-installed and
+      # the licenses pre-accepted. See the note in ci.yml.
+      - name: Verify Android SDK is present
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          test -d "$ANDROID_SDK_ROOT"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-release-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build review HTML
+        run: npm run build:review
+
+      - name: Check release signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=()
+          [ -z "$KEYSTORE_B64" ]      && missing+=(KEYSTORE_B64)
+          [ -z "$KEYSTORE_PASSWORD" ] && missing+=(KEYSTORE_PASSWORD)
+          [ -z "$KEY_ALIAS" ]         && missing+=(KEY_ALIAS)
+          [ -z "$KEY_PASSWORD" ]      && missing+=(KEY_PASSWORD)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing release signing secrets: ${missing[*]}"
+            echo "::error::Add these in the repo's Settings -> Secrets and variables -> Actions, then re-run."
+            echo "::error::See RELEASING.md for how to generate the keystore."
+            exit 1
+          fi
+          echo "All signing secrets present."
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore/release.keystore"
+          # Hand the path to subsequent steps via env.
+          echo "P2D_RELEASE_KEYSTORE=$RUNNER_TEMP/keystore/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+          P2D_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          P2D_RELEASE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          P2D_RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: npm run android:apk -- assembleRelease
+
+      - name: Collect and rename artifacts
+        id: artifacts
+        run: |
+          set -e
+          out="$RUNNER_TEMP/release-assets"
+          mkdir -p "$out"
+
+          apk_src="android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$apk_src" ]; then
+            echo "::error::Signed APK not found at $apk_src"
+            ls -R android/app/build/outputs/apk || true
+            exit 1
+          fi
+          cp "$apk_src" "$out/${{ steps.version.outputs.apk }}"
+
+          review_src="review/plot2data-review.html"
+          if [ ! -f "$review_src" ]; then
+            echo "::error::Review build not found at $review_src"
+            exit 1
+          fi
+          cp "$review_src" "$out/${{ steps.version.outputs.review }}"
+
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+          ls -lh "$out"
+
+      - name: Verify APK metadata and permissions
+        run: |
+          apk="${{ steps.artifacts.outputs.dir }}/${{ steps.version.outputs.apk }}"
+          aapt2="$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 | sort | tail -n1)"
+          echo "aapt2: $aapt2"
+          "$aapt2" dump badging "$apk" | tee "$RUNNER_TEMP/badging.txt"
+
+          vname="$("$aapt2" dump badging "$apk" | sed -n "s/^package:.*versionName='\\([^']*\\)'.*$/\\1/p")"
+          vcode="$("$aapt2" dump badging "$apk" | sed -n "s/^package:.*versionCode='\\([0-9]*\\)'.*$/\\1/p")"
+          echo "versionName=$vname versionCode=$vcode (tag ${{ steps.version.outputs.version }})"
+
+          if [ "$vname" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::APK versionName ($vname) does not match tag (${{ steps.version.outputs.version }})"
+            echo "::error::Bump android/app/build.gradle.kts versionName before tagging."
+            exit 1
+          fi
+
+          # Permissions must be exactly INTERNET and REQUEST_INSTALL_PACKAGES.
+          perms="$(grep "^uses-permission:" "$RUNNER_TEMP/badging.txt" | sed -n "s/^uses-permission:.*name='\\([^']*\\)'.*$/\\1/p" | sort -u)"
+          echo "Permissions found:"
+          echo "$perms"
+          expected=$'android.permission.INTERNET\nandroid.permission.REQUEST_INSTALL_PACKAGES'
+          if [ "$perms" != "$expected" ]; then
+            echo "::error::Permissions mismatch. Expected exactly INTERNET and REQUEST_INSTALL_PACKAGES."
+            exit 1
+          fi
+
+      - name: Generate release notes
+        id: notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          prev="$(git tag --list 'v*' --sort=-creatordate | grep -v "^$TAG\$" | head -n1)"
+          apk="${{ steps.artifacts.outputs.dir }}/${{ steps.version.outputs.apk }}"
+          aapt2="$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 | sort | tail -n1)"
+          vcode="$("$aapt2" dump badging "$apk" | sed -n "s/^package:.*versionCode='\\([0-9]*\\)'.*$/\\1/p")"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "## plot2data $TAG"
+            echo
+            if [ -n "$prev" ]; then
+              echo "Changes since \`$prev\`:"
+            else
+              echo "First tagged release."
+            fi
+            echo
+            if [ -n "$prev" ]; then
+              git log --pretty=format:'- %s (%h)' "$prev..$TAG"
+            else
+              git log --pretty=format:'- %s (%h)' -n 50
+            fi
+            echo
+            echo
+            echo "### Artifacts"
+            echo
+            echo "- \`${{ steps.version.outputs.apk }}\` - signed Android APK, installs over the previous version"
+            echo "- \`${{ steps.version.outputs.review }}\` - standalone single-file review build (open in any browser over https)"
+            echo
+            # Machine-readable line the in-app updater parses to compare
+            # Android versionCode without having to download the APK. Human
+            # readers get the semver tag above.
+            echo "plot2data: versionCode=$vcode"
+          } > "$notes"
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
+          cat "$notes"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2.2.2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: plot2data ${{ steps.version.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.notes }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.artifacts.outputs.dir }}/${{ steps.version.outputs.apk }}
+            ${{ steps.artifacts.outputs.dir }}/${{ steps.version.outputs.review }}
