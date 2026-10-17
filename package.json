@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "corpus": "node --experimental-strip-types tools/generate-corpus.ts",
     "accuracy": "npm run assets && vitest run test/accuracy.test.ts --reporter=verbose",
-    "report": "npm run assets && node --experimental-strip-types tools/accuracy-report.ts"
+    "report": "npm run assets && node --experimental-strip-types tools/accuracy-report.ts",
+    "eval:real": "npm run assets && node --experimental-strip-types tools/eval-real.ts"
   },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
