@@ -132,7 +132,7 @@ const state: State = {
   readLabels: 'auto',
   delimiter: 'comma',
   withHeader: true,
-  imageOpacity: 0.45,
+  imageOpacity: 0.55,
   pointRadius: 1,
   magnify: false,
   linkZoom: true,
@@ -205,13 +205,14 @@ app.innerHTML = `
         <div class="panel-canvas"><canvas id="overlay" aria-label="The extracted data drawn over the original image"></canvas></div>
         <div class="panel-tools">
           <label for="opacity">Image</label>
-          <input type="range" id="opacity" min="0" max="100" step="5" value="45"
+          <input type="range" id="opacity" min="0" max="100" step="5" value="55"
             aria-label="Original image opacity" />
           <label for="point-size">Point size</label>
           <input type="range" id="point-size" min="0" max="2.5" step="0.1" value="1"
             aria-label="Point marker size" />
           <label class="check-row"><input type="checkbox" id="magnify" /> Magnifier</label>
           <button id="overlay-fit">Fit</button>
+          <button id="overlay-save">Save overlay as PNG</button>
         </div>
       </section>
 
@@ -706,6 +707,31 @@ boxZoomBtn.addEventListener('click', () => {
     : 'Drag to pan, pinch or scroll to zoom.';
 });
 document.getElementById('overlay-fit')!.addEventListener('click', () => overlay.viewport.resetView());
+
+document.getElementById('overlay-save')!.addEventListener('click', async () => {
+  const blob = await overlay.saveToBlob('image/png');
+  if (!blob) return;
+  // On Android we route through the shell's native file-save flow; in the
+  // browser a plain anchor is enough and avoids a round trip through the
+  // host bridge.
+  const name = exportName('overlay.png');
+  if (onAndroid) {
+    const buffer = await blob.arrayBuffer();
+    await exportFile('save', name, new Uint8Array(buffer), 'image/png');
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+});
 
 const linkBox = document.getElementById('link-zoom') as HTMLInputElement;
 linkBox.addEventListener('change', () => {

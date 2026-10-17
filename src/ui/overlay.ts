@@ -18,7 +18,7 @@ import { valueToPixel } from '../engine/calibration.ts';
 import type { Calibration, DataSeries } from '../engine/types.ts';
 import { Viewport, type WorldRect } from './viewport.ts';
 import { drawMagnifier } from './magnifier.ts';
-import type { MarkerShape, SeriesStyle } from './chart.ts';
+import type { SeriesStyle } from './chart.ts';
 
 export interface OverlayData {
   bitmap: ImageBitmap;
@@ -35,52 +35,23 @@ export interface OverlayData {
 }
 
 /**
- * Draw one marker.
+ * One round, filled dot in the series colour.
  *
- * The overlay's markers are deliberately hollow, with a light fill and the
- * series colour as the outline: the point of this panel is to see whether the
- * extracted point lands on the ink underneath it, and a solid marker hides the
- * very thing being checked.
+ * The captain assembles his review overlay in PowerPoint by drawing small
+ * dotted markers on top of the chart image at about 55% opacity: a filled
+ * round marker in the series colour reads against a dim original of any
+ * shape, and the same dot style applied to every series makes the overlay
+ * easy to compare across charts. Shape overrides apply to the chart panel
+ * and the exported file; the overlay panel is for review and stays round.
  */
-function markerPath(
+function markerDot(
   ctx: CanvasRenderingContext2D,
-  shape: MarkerShape,
   x: number,
   y: number,
   r: number,
 ): void {
   ctx.beginPath();
-  switch (shape) {
-    case 'rect':
-    case 'roundRect':
-      ctx.rect(x - r, y - r, r * 2, r * 2);
-      break;
-    case 'triangle':
-      ctx.moveTo(x, y - r);
-      ctx.lineTo(x + r, y + r);
-      ctx.lineTo(x - r, y + r);
-      ctx.closePath();
-      break;
-    case 'diamond':
-      ctx.moveTo(x, y - r);
-      ctx.lineTo(x + r, y);
-      ctx.lineTo(x, y + r);
-      ctx.lineTo(x - r, y);
-      ctx.closePath();
-      break;
-    case 'arrow':
-      ctx.moveTo(x, y - r);
-      ctx.lineTo(x + r, y + r);
-      ctx.lineTo(x, y + r * 0.4);
-      ctx.lineTo(x - r, y + r);
-      ctx.closePath();
-      break;
-    case 'pin':
-      ctx.arc(x, y - r * 0.3, r * 0.8, 0, Math.PI * 2);
-      break;
-    default:
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-  }
+  ctx.arc(x, y, r, 0, Math.PI * 2);
 }
 
 export class OverlayPanel {
@@ -179,15 +150,16 @@ export class OverlayPanel {
         path();
         ctx.setLineDash([]);
       }
-      const radius = (style.size / 2) * data.pointScale;
-      if (style.shape !== 'none' && radius > 0.2) {
+      // Round, filled dots in the series colour, every series the same shape.
+      // The reference the captain approved is a dotted trace laid over a dim
+      // original - matching the series' own marker shape here would make the
+      // overlay look like the chart panel instead of a side-by-side review.
+      const radius = Math.max(0.9, (style.size / 2) * data.pointScale);
+      if (style.shape !== 'none') {
+        ctx.fillStyle = style.colour;
         for (const p of points) {
-          markerPath(ctx, style.shape, p.x, p.y, radius);
-          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          markerDot(ctx, p.x, p.y, radius);
           ctx.fill();
-          ctx.lineWidth = 1;
-          ctx.strokeStyle = style.colour;
-          ctx.stroke();
         }
       }
     });
@@ -247,9 +219,54 @@ export class OverlayPanel {
       if (style.shape === 'none') return;
       ctx.fillStyle = style.colour;
       for (const p of points) {
-        markerPath(ctx, style.shape, p.x, p.y, 2.5);
+        markerDot(ctx, p.x, p.y, 2.5);
         ctx.fill();
       }
     });
+  }
+
+  /**
+   * Render the overlay at the image's natural resolution and hand back a
+   * blob the caller can save, share or copy.
+   *
+   * Important: this draws at native image coordinates, not at the viewport's
+   * scaled coordinates, so the exported file matches the proportions the
+   * captain would get by compositing in PowerPoint. The point scale and the
+   * image opacity are the ones the user settled on in the panel.
+   */
+  async saveToBlob(mimeType: string = 'image/png'): Promise<Blob | null> {
+    const data = this.data;
+    if (!data) return null;
+    const w = data.bitmap.width;
+    const h = data.bitmap.height;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    // White behind the dimmed image so the resulting file has an opaque
+    // background rather than a transparent one that depends on the viewer.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = data.imageOpacity;
+    ctx.drawImage(data.bitmap, 0, 0);
+    ctx.globalAlpha = 1;
+    data.series.forEach((series, index) => {
+      const style = data.styles[index];
+      if (!style || style.shape === 'none') return;
+      const radius = Math.max(1.2, (style.size / 2) * data.pointScale);
+      ctx.fillStyle = style.colour;
+      for (const p of series.points) {
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+        const px = valueToPixel(data.calibration.x, p.x);
+        const py = valueToPixel(data.calibration.y, p.y);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+        markerDot(ctx, px, py, radius);
+        ctx.fill();
+      }
+    });
+    return await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), mimeType),
+    );
   }
 }
