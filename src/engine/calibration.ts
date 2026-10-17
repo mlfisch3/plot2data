@@ -181,7 +181,6 @@ function robustLeastSquares(
   // guard is what the women-men chart needs: dropping `2021` leaves a perfect
   // fit on the other five labels while the full fit still looks tolerable in
   // relative terms, so the ratio check alone would not fire.
-  const quantumPx = quantum > 0 && Math.abs(trimmed.slope) > 0 ? quantum / Math.abs(trimmed.slope) : Infinity;
   const trimmedResidualPx = trimmed.residual / Math.max(Math.abs(trimmed.slope), 1e-12);
   const fullResidualPx = full.residual / Math.max(Math.abs(full.slope), 1e-12);
   const dramaticImprovement = trimmed.relativeResidual < full.relativeResidual * 0.4;

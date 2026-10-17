@@ -99,6 +99,134 @@ function longestRun(
   return { start: bestStart, end: bestEnd, strength: len > 0 ? bestSum / len : 0 };
 }
 
+/**
+ * Every long enough ink run per row (or column), not just the longest.
+ *
+ * On a multipanel composite each gridline passes through every panel as a
+ * separate run broken by panel gutters; the single-run scanner used by
+ * `detectFrame` picks one and drops the rest, so a plot sitting beside another
+ * one leaves no evidence in `hBands`. The multi-plot detector needs them all.
+ */
+function scanAllLongRuns(
+  img: ImageBuffer,
+  bg: RGB,
+  horizontal: boolean,
+  opts: FrameOptions,
+): RunCandidate[] {
+  const outer = horizontal ? img.height : img.width;
+  const span = horizontal ? img.width : img.height;
+  // Keep the gap tolerance tight: a multipanel composite has 20-25 px gutters
+  // between panels and a looser gap would bridge them into one long run and
+  // hide the panel structure. The single-plot `detectFrame` uses 2% for
+  // dotted gridlines, but this scanner needs panels to stay distinct.
+  const maxGap = Math.max(2, Math.min(8, Math.round(span * 0.01)));
+  const minLen = span * opts.minRunFraction;
+  const raw: RunCandidate[] = [];
+
+  for (let p = 0; p < outer; p++) {
+    // Walk the row and collect every ink stretch, bridging small gaps.
+    let runStart = -1;
+    let runSum = 0;
+    let lastInk = -1;
+    let gap = 0;
+    let coloured = 0;
+    let inked = 0;
+    const commit = () => {
+      if (runStart < 0 || lastInk < runStart) return;
+      const len = lastInk - runStart + 1;
+      if (len < minLen) return;
+      raw.push({
+        pos: p,
+        start: runStart,
+        end: lastInk,
+        coreStart: runStart,
+        coreEnd: lastInk,
+        length: len,
+        strength: len > 0 ? runSum / len : 0,
+        gray: inked === 0 || coloured / inked < 0.6,
+      });
+    };
+    for (let i = 0; i < span; i++) {
+      const c = horizontal ? getPixel(img, i, p) : getPixel(img, p, i);
+      const d = colourDistance(c, bg);
+      if (d >= opts.inkThreshold) {
+        if (runStart < 0) {
+          runStart = i;
+          runSum = 0;
+          coloured = 0;
+          inked = 0;
+          gap = 0;
+        }
+        runSum += Math.min(1, d / 160);
+        lastInk = i;
+        inked++;
+        if (!isGray(c, opts.maxSpineSaturation)) coloured++;
+        gap = 0;
+      } else if (runStart >= 0 && ++gap > maxGap) {
+        commit();
+        runStart = -1;
+      }
+    }
+    commit();
+  }
+  // Sort by (pos, start) so `mergeBands` sees adjacent-row runs in order.
+  raw.sort((a, b) => a.pos - b.pos || a.start - b.start);
+  return raw;
+}
+
+/**
+ * Merge runs that are adjacent in `pos` AND overlap in extent.
+ *
+ * One physical gridline is drawn two or three pixels thick, so it generates
+ * runs on consecutive rows at the same x. On a multipanel composite each row
+ * also carries other runs for the other panels, and the wrong merge glues them
+ * together across the gutter. Only merging when the extents actually overlap
+ * keeps a one-pixel-thick panel-1 gridline distinct from a panel-2 gridline on
+ * the adjacent row.
+ */
+function mergeRunsPerRow(runs: RunCandidate[]): Band[] {
+  if (runs.length === 0) return [];
+  const used = new Array(runs.length).fill(false);
+  const out: Band[] = [];
+  for (let i = 0; i < runs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    const members = [runs[i]];
+    // Walk forward; stop as soon as we skip two rows with no match.
+    let furthest = runs[i].pos;
+    for (let j = i + 1; j < runs.length; j++) {
+      if (used[j]) continue;
+      if (runs[j].pos - furthest > 2) break;
+      // Must share x-range with any current member.
+      const r = runs[j];
+      const matches = members.some(
+        (m) => Math.min(m.end, r.end) - Math.max(m.start, r.start) >= Math.min(m.end - m.start, r.end - r.start) * 0.5,
+      );
+      if (!matches) continue;
+      used[j] = true;
+      members.push(r);
+      furthest = Math.max(furthest, r.pos);
+    }
+    let wsum = 0;
+    let psum = 0;
+    for (const m of members) {
+      wsum += m.strength;
+      psum += m.strength * m.pos;
+    }
+    out.push({
+      pos: wsum > 0 ? psum / wsum : members[0].pos,
+      thickness: furthest - members[0].pos + 1,
+      start: Math.min(...members.map((m) => m.start)),
+      end: Math.max(...members.map((m) => m.end)),
+      coreStart: median(members.map((m) => m.coreStart)),
+      coreEnd: median(members.map((m) => m.coreEnd)),
+      strength: Math.max(...members.map((m) => m.strength)),
+      gray: members.filter((m) => m.gray).length * 2 >= members.length,
+    });
+  }
+  return out;
+}
+
 function scanLines(img: ImageBuffer, bg: RGB, horizontal: boolean, opts: FrameOptions): RunCandidate[] {
   const outer = horizontal ? img.height : img.width;
   const span = horizontal ? img.width : img.height;
@@ -378,4 +506,218 @@ export function detectFrame(img: ImageBuffer, options: Partial<FrameOptions> = {
 
 export function insetRect(r: Rect, by: number): Rect {
   return { x0: r.x0 + by, y0: r.y0 + by, x1: r.x1 - by, y1: r.y1 - by };
+}
+
+/**
+ * A plot candidate found in an uncropped image.
+ *
+ * `rect` is a conservative data-area rectangle. `confidence` ranks the
+ * candidates against each other; the top one is auto-selected when it is
+ * clearly stronger than the rest, and otherwise the user is asked to pick.
+ */
+export interface PlotCandidate {
+  rect: Rect;
+  /** 0..1. See `scorePlotCandidate` for what counts. */
+  confidence: number;
+  /** Number of parallel horizontal runs (gridlines or spines) agreeing on the x extent. */
+  horizontalLines: number;
+  /** Number of parallel vertical runs agreeing on the y extent. */
+  verticalLines: number;
+  /** Rough label: 'full-box' | 'bottom-only' | 'label-only'. */
+  kind: 'full-box' | 'bottom-left' | 'bottom-only' | 'label-only';
+}
+
+/**
+ * Find every plot-like rectangle in an image.
+ *
+ * Rather than picking one global plot frame, this returns every candidate
+ * region whose horizontal gridlines and vertical runs agree on a rectangle.
+ * On a cropped-to-one-plot image the top result is the plot. On a multipanel
+ * composite the result is one entry per panel, each with its own x range
+ * taken from the gridline cluster that sits inside it.
+ *
+ * Candidates are returned in descending confidence. The caller decides what
+ * to do with multiple: an auto-select when one dominates, a picker otherwise.
+ */
+export function detectPlotCandidates(
+  img: ImageBuffer,
+  options: Partial<FrameOptions> = {},
+): PlotCandidate[] {
+  const opts = { ...DEFAULT_FRAME_OPTIONS, ...options };
+  const bg = dominantColour(img);
+
+  // Pick up faint gridlines too: a clean chart often draws them at 8-12%
+  // contrast, well below the normal ink threshold. Taking a dedicated low
+  // threshold just for the panel scan keeps the main frame detector tight.
+  const scanOpts = { ...opts, inkThreshold: Math.min(opts.inkThreshold, 15), minRunFraction: 0.1 };
+  // scanLines only reports one longest run per row. On a multipanel composite
+  // the per-panel gridlines are shorter than the one global band and get
+  // dropped. Walk the image once more and collect every run that passes the
+  // length floor, not just the longest. The usual `mergeBands` step would
+  // merge adjacent-row runs blindly, which is wrong when there are several
+  // non-overlapping runs on the same row: let `mergeRunsPerRow` do an x-aware
+  // merge instead.
+  const hAll = mergeRunsPerRow(scanAllLongRuns(img, bg, true, scanOpts));
+  const vAll = mergeRunsPerRow(scanAllLongRuns(img, bg, false, scanOpts));
+  const hBands = hAll;
+  const vBands = vAll;
+
+  // Drop runs that span most of the image AND hug the edge: screenshot borders.
+  // Keep candidate panel separators, which are also long but not at the edge.
+  const hUse = hBands.filter(
+    (b) =>
+      !(
+        (b.pos <= 2 || b.pos >= img.height - 3) &&
+        b.end - b.start + 1 >= img.width * 0.95
+      ),
+  );
+  const vUse = vBands.filter(
+    (b) =>
+      !(
+        (b.pos <= 2 || b.pos >= img.width - 3) &&
+        b.end - b.start + 1 >= img.height * 0.95
+      ),
+  );
+
+  // Cluster horizontal runs by their (start, end) x-range. On a multipanel
+  // composite each panel's gridlines share one x-range; on a single-plot
+  // image every gridline shares the plot's full x-range.
+  const hGroups = clusterBandsByExtent(hUse, img.width);
+
+  const candidates: PlotCandidate[] = [];
+
+  // Primary signal: horizontal gridline cluster → x-range, y-extent from the
+  // cluster's own range. The data area's y-range is from the topmost band to
+  // the bottommost in the group; the x-range is the shared extent.
+  for (const group of hGroups) {
+    if (group.length < 3) continue;
+    const xLo = median(group.map((b) => b.coreStart));
+    const xHi = median(group.map((b) => b.coreEnd));
+    if (xHi - xLo < img.width * 0.08) continue;
+    const yLo = Math.min(...group.map((b) => Math.round(b.pos)));
+    const yHi = Math.max(...group.map((b) => Math.round(b.pos)));
+    if (yHi - yLo < img.height * 0.08) continue;
+
+    // Look for vertical bands whose extent falls inside this [yLo..yHi]
+    // range and whose x position is close to the x-extent limits.
+    const matchingV = vUse.filter(
+      (b) =>
+        b.pos >= xLo - 4 &&
+        b.pos <= xHi + 4 &&
+        b.start <= yLo + 10 &&
+        b.end >= yHi - 10,
+    );
+    const kind = chooseKind(hUse, matchingV, { x0: xLo, y0: yLo, x1: xHi, y1: yHi });
+    const confidence = scorePlotCandidate(group.length, matchingV.length, img, {
+      x0: xLo,
+      y0: yLo,
+      x1: xHi,
+      y1: yHi,
+    });
+    candidates.push({
+      rect: {
+        x0: Math.round(xLo),
+        y0: yLo,
+        x1: Math.round(xHi),
+        y1: yHi,
+      },
+      confidence,
+      horizontalLines: group.length,
+      verticalLines: matchingV.length,
+      kind,
+    });
+  }
+
+  // Dedupe: candidates whose rects overlap by more than 70% are the same plot.
+  const unique: PlotCandidate[] = [];
+  for (const c of candidates.sort((a, b) => b.confidence - a.confidence)) {
+    if (unique.some((u) => overlapRatio(u.rect, c.rect) > 0.7)) continue;
+    unique.push(c);
+  }
+  // Fall back to a single global rectangle if the gridline-cluster approach
+  // found nothing: a plot drawn with four strong spines and no inner lines.
+  if (unique.length === 0) {
+    const fallback = detectFrame(img, options);
+    unique.push({
+      rect: fallback.rect,
+      confidence: fallback.confidence,
+      horizontalLines: 0,
+      verticalLines: 0,
+      kind: 'full-box',
+    });
+  }
+  return unique;
+}
+
+/** Group bands that share a start/end extent to within a fraction of the span. */
+function clusterBandsByExtent(bands: Band[], span: number): Band[][] {
+  const tol = Math.max(6, span * 0.02);
+  const groups: Band[][] = [];
+  for (const b of bands) {
+    const matched = groups.find((g) => {
+      const g0 = median(g.map((x) => x.coreStart));
+      const g1 = median(g.map((x) => x.coreEnd));
+      return Math.abs(g0 - b.coreStart) <= tol && Math.abs(g1 - b.coreEnd) <= tol;
+    });
+    if (matched) matched.push(b);
+    else groups.push([b]);
+  }
+  return groups;
+}
+
+/** Score a candidate by its evidence: more lines + more inner ink = stronger. */
+function scorePlotCandidate(
+  hCount: number,
+  vCount: number,
+  img: ImageBuffer,
+  rect: { x0: number; y0: number; x1: number; y1: number },
+): number {
+  const area = (rect.x1 - rect.x0) * (rect.y1 - rect.y0);
+  if (area <= 0) return 0;
+  // Count ink pixels inside the rectangle (data presence).
+  const bg = dominantColour(img);
+  let ink = 0;
+  const stepX = Math.max(1, Math.round((rect.x1 - rect.x0) / 60));
+  const stepY = Math.max(1, Math.round((rect.y1 - rect.y0) / 40));
+  for (let y = Math.max(0, Math.round(rect.y0)); y <= Math.min(img.height - 1, Math.round(rect.y1)); y += stepY) {
+    for (let x = Math.max(0, Math.round(rect.x0)); x <= Math.min(img.width - 1, Math.round(rect.x1)); x += stepX) {
+      if (colourDistance(getPixel(img, x, y), bg) >= 25) ink++;
+    }
+  }
+  const sampled = Math.max(1, Math.round((rect.x1 - rect.x0) / stepX) * Math.round((rect.y1 - rect.y0) / stepY));
+  const inkShare = Math.min(1, ink / sampled);
+  const lineScore = Math.min(1, hCount / 5) * 0.6 + Math.min(1, vCount / 2) * 0.2;
+  return Math.max(0, Math.min(1, lineScore + inkShare * 0.3));
+}
+
+function overlapRatio(a: Rect, b: Rect): number {
+  const ix = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
+  const iy = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+  const inter = ix * iy;
+  const aArea = Math.max(1, (a.x1 - a.x0) * (a.y1 - a.y0));
+  const bArea = Math.max(1, (b.x1 - b.x0) * (b.y1 - b.y0));
+  return inter / Math.min(aArea, bArea);
+}
+
+function chooseKind(
+  hBands: Band[],
+  vBands: Band[],
+  rect: Rect,
+): PlotCandidate['kind'] {
+  const strongBottom = hBands.some(
+    (b) => Math.abs(b.pos - rect.y1) <= 3 && b.strength >= 0.3 && b.gray,
+  );
+  const strongTop = hBands.some(
+    (b) => Math.abs(b.pos - rect.y0) <= 3 && b.strength >= 0.3 && b.gray,
+  );
+  const strongLeft = vBands.some(
+    (b) => Math.abs(b.pos - rect.x0) <= 3 && b.strength >= 0.3 && b.gray,
+  );
+  const strongRight = vBands.some(
+    (b) => Math.abs(b.pos - rect.x1) <= 3 && b.strength >= 0.3 && b.gray,
+  );
+  if (strongTop && strongBottom && strongLeft && strongRight) return 'full-box';
+  if (strongBottom && strongLeft) return 'bottom-left';
+  if (strongBottom) return 'bottom-only';
+  return 'label-only';
 }

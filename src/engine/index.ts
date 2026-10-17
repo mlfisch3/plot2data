@@ -28,7 +28,14 @@ export type {
   Uncertainty,
 } from './types.ts';
 
-export { detectFrame, DEFAULT_FRAME_OPTIONS, insetRect, type FrameOptions } from './frame.ts';
+export {
+  detectFrame,
+  detectPlotCandidates,
+  DEFAULT_FRAME_OPTIONS,
+  insetRect,
+  type FrameOptions,
+  type PlotCandidate,
+} from './frame.ts';
 export {
   detectTicks,
   findLabelBand,
