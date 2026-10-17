@@ -146,13 +146,16 @@ jobs:
             exit 1
           fi
 
-          # Permissions must be exactly INTERNET and REQUEST_INSTALL_PACKAGES.
-          perms="$(grep "^uses-permission:" "$RUNNER_TEMP/badging.txt" | sed -n "s/^uses-permission:.*name='\\([^']*\\)'.*$/\\1/p" | sort -u)"
-          echo "Permissions found:"
+          # Permissions must be exactly INTERNET and REQUEST_INSTALL_PACKAGES,
+          # plus AGP's own self-declared DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+          # (<applicationId>.*), which AGP injects for androidx's own broadcast
+          # receivers, is signature-protected and declared by this app about itself.
+          perms="$(grep "^uses-permission:" "$RUNNER_TEMP/badging.txt" | sed -n "s/^uses-permission:.*name='\\([^']*\\)'.*$/\\1/p" | grep -v '\.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION$' | sort -u)"
+          echo "Permissions found (excluding AGP's self-declared signature-level entry):"
           echo "$perms"
           expected=$'android.permission.INTERNET\nandroid.permission.REQUEST_INSTALL_PACKAGES'
           if [ "$perms" != "$expected" ]; then
-            echo "::error::Permissions mismatch. Expected exactly INTERNET and REQUEST_INSTALL_PACKAGES."
+            echo "::error::Permissions mismatch. Expected exactly INTERNET and REQUEST_INSTALL_PACKAGES (plus AGP's auto-injected signature permission)."
             exit 1
           fi
 
