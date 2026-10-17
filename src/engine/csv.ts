@@ -63,6 +63,30 @@ export function csvHeader(
   // chart covers rather than restating the anchor values.
   if (options.source) lines.push(`# source: ${options.source}`);
 
+  // Chart title, axis titles, legend names: the chart's own prose, OCR'd from
+  // around the frame. Cosmetic - a bad read costs a title, not a number - but
+  // they travel with the data in the header so a reader a year later knows
+  // which chart these numbers came out of.
+  const text = analysis.textAnnotations;
+  if (text?.title) lines.push(`# chart title: ${text.title}`);
+  if (text?.xTitle) {
+    lines.push(
+      `# x axis: ${text.xTitle}${text.xUnit ? ` [${text.xUnit}]` : ''}`,
+    );
+  }
+  if (text?.yTitle) {
+    lines.push(
+      `# y axis: ${text.yTitle}${text.yUnit ? ` [${text.yUnit}]` : ''}`,
+    );
+  }
+  if (analysis.legend?.length) {
+    const named = analysis.legend
+      .filter((l) => l.text)
+      .map((l) => `  "${l.text}"`)
+      .join('\n');
+    if (named) lines.push(`# legend entries read from the chart:`, named);
+  }
+
   const modes = new Set(series.map((s) => s.mode));
   if (modes.has('marker')) {
     lines.push('# mode: marker - each row is a detected marker centroid, a real data point');

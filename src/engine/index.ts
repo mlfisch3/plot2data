@@ -117,6 +117,7 @@ export {
   type LegendLabel,
   type LegendOptions,
 } from './legend.ts';
+export { readTextAnnotations, type TextAnnotations } from './text-annotations.ts';
 export {
   compact,
   csvHeader,
