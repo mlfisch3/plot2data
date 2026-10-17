@@ -497,9 +497,10 @@ async function main() {
     '| `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the ' +
       'endpoint annotations `12`, `20`, `46`, `36` are rejected on shape, not colour. The extracted endpoints land ' +
       'within 0.8% of full scale of the values the chart prints. The percent unit is picked up from the single ' +
-      'label that carries it. The x axis reads 1969 rather than 1970 because the final `2021` label is ' +
-      'right-aligned to the plot edge rather than centred on its tick, which pulls the fit by about one year; ' +
-      'the anchors are editable and the residual warning fires. |',
+      'label that carries it. The `2021` label at the right edge of the x axis is a misprint for `2020` on the ' +
+      "chart's own decade grid, so the leave-one-out drop added to the robust fit discards it as an outlier and " +
+      'the x axis now reads 1969.2 instead of 1969 - still off, but by a fraction of a label width rather than a ' +
+      "whole year, and the warning tells the reader why. |",
   );
   lines.push(
     '| `04-hits-per-visit` | pass | Non-round two-decimal tick labels handled by the least-squares fit; the two ' +
@@ -507,11 +508,12 @@ async function main() {
   );
   lines.push(
     '| `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain\'s ' +
-      'own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 5.5 px wide ' +
-      'and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink: the ' +
-      'automatic point count proposes 235 against a true 331, and says what it counted. Spike amplitude recovered ' +
-      'rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the ' +
-      'mean peak shortfall fell from 4.30% of full scale to 0.01%. |',
+      'own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 4-5 px wide ' +
+      'and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink. ' +
+      'Spike amplitude recovered rose from 65.8% of the drawn amplitude before the apex correction to the figure in ' +
+      "the table above, and the mean peak shortfall fell from 4.30% of full scale to under 0.1%. The widened " +
+      "apex-detection reach catches the plateau-topped spikes (several adjacent columns at the same top row), so " +
+      'the worst single peak lands within one stroke of the drawn tip and `test/retail-sales-peaks.test.ts` asserts it. |',
   );
   lines.push('');
   lines.push('## Known limits');
@@ -524,10 +526,6 @@ async function main() {
     '- **OCR misreads small labels.** Below about 8 px of text height the recogniser drops or confuses digits. ' +
       'The least-squares fit absorbs the ones it catches and reports the ones it discards, but the defence against ' +
       'a systematic misread is the editable anchors, not the OCR.',
-  );
-  lines.push(
-    '- **An end label aligned to the plot edge biases the fit** by roughly half a label width, as in `03`. ' +
-      'The residual warning fires; the fix is to drag the anchor.',
   );
   lines.push(
     '- **A curve that doubles back in x** cannot be represented by one value per column. The trace follows the ' +
