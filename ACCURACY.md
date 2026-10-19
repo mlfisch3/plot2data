@@ -32,11 +32,11 @@ with the number of turning points a case has; a monotone curve has none and read
 | `offset-annotation` | 1/1 | curve | linear/linear | 0.032% | 100% | - | 0.083% / 0.056% |
 | `retina-2x` | 1/1 | curve | linear/linear | 0.196% | 99% | 0.108% (3) | 0.096% / 0.135% |
 | `log-log` | 1/1 | curve | log/log | 0.074% | 94% | - | 0.060% / 0.035% |
-| `sawtooth-sharp` | 1/1 | curve | linear/linear | 0.234% | 100% | -0.263% (15) | 0.017% / 0.054% |
-| `narrow-peaks` | 1/1 | curve | linear/linear | 0.283% | 100% | -0.053% (11) | 0.017% / 0.054% |
+| `sawtooth-sharp` | 1/1 | curve | linear/linear | 0.258% | 100% | -0.263% (15) | 0.017% / 0.054% |
+| `narrow-peaks` | 1/1 | curve | linear/linear | 0.362% | 100% | -0.053% (11) | 0.017% / 0.054% |
 | `narrow-small` | 1/1 | curve | linear/linear | 0.077% | 99% | 0.023% (3) | 0.138% / 0.102% |
 
-Worst case across the whole synthetic corpus: **0.283% of full scale** RMS, against a target of "well under 1%", and **0.263% of full scale** at the peaks.
+Worst case across the whole synthetic corpus: **0.362% of full scale** RMS, against a target of "well under 1%", and **0.263% of full scale** at the peaks.
 
 ### Why peaks are measured separately
 
@@ -96,7 +96,7 @@ What it demands: abbreviated `42k` tick labels, no y-axis line, rounded printed 
 | axis scales | linear/linear | linear/linear |
 | series found | 1 | 1 |
 | mode | curve | curve |
-| reported uncertainty | - | +/-0.0224 in x, +/-349 in y |
+| reported uncertainty | - | +/-0.0218 in x, +/-340 in y |
 
 ### `01-panel2.png` - Multipanel, panel 2 (cropped)
 
@@ -109,7 +109,7 @@ What it demands: flat data line lying on top of the x axis; rounded `0, 4k, 9k, 
 | axis scales | linear/linear | linear/linear |
 | series found | 1 | 1 |
 | mode | curve | curve |
-| reported uncertainty | - | +/-0.0228 in x, +/-190 in y |
+| reported uncertainty | - | +/-0.0219 in x, +/-182 in y |
 
 ### `01-panel3.png` - Multipanel, panel 3 (cropped)
 
@@ -122,7 +122,7 @@ What it demands: as panel 1, larger values.
 | axis scales | linear/linear | linear/linear |
 | series found | 1 | 1 |
 | mode | curve | curve |
-| reported uncertainty | - | +/-0.0226 in x, +/-731 in y |
+| reported uncertainty | - | +/-0.0218 in x, +/-706 in y |
 
 ### `02-microprocessor-log-scatter.png` - 42 Years of Microprocessor Trend Data
 
@@ -157,14 +157,18 @@ What it demands: text inside the plot in the series colour, percent unit on one 
 
 | Check | Printed on the chart | Extracted |
 | --- | --- | --- |
-| x range | 1970 to 2021 | 1969 to 2021.89 |
+| x range | 1970 to 2021 | 1969.16 to 2021.45 |
 | y range | 0 to 60 | 0.537 to 60.04 |
 | axis scales | linear/linear | linear/linear |
 | series found | 2 | 2 |
 | mode | curve | curve |
-| endpoint printed as 46 | 46 at x=2021 | 45.848 at x=2021.3 (-0.25% of full scale) |
-| endpoint printed as 36 | 36 at x=2021 | 36.4411 at x=2021.3 (0.74% of full scale) |
-| reported uncertainty | - | +/-0.351 in x, +/-0.441 in y |
+| endpoint printed as 46 | 46 at x=2021 | 45.848 at x=2020.86 (-0.25% of full scale) |
+| endpoint printed as 36 | 36 at x=2021 | 36.4411 at x=2020.86 (0.74% of full scale) |
+| reported uncertainty | - | +/-0.347 in x, +/-0.441 in y |
+
+Warnings raised in the UI and written into the CSV header:
+
+- *warn*: 1 x-axis tick label was discarded as a misread before fitting. Check the x anchors.
 
 ### `05-retail-sales-monthly.png` - U.S. Retail Sales, monthly
 
@@ -177,8 +181,8 @@ What it demands: a dense spiky monthly series drawn with a pen wider than its ow
 | axis scales | linear/linear | linear/linear |
 | series found | 1 | 1 |
 | mode | curve | curve |
-| spike amplitude recovered | 100% of what is drawn | 94.2% mean, 98.5% median, 52.2% worst, over 47 spikes |
-| reported uncertainty | - | +/-0.0505 in x, +/-1.62 in y |
+| spike amplitude recovered | 100% of what is drawn | 96.5% mean, 100.0% median, 52.2% worst, over 47 spikes |
+| reported uncertainty | - | +/-0.0517 in x, +/-1.66 in y |
 
 ### `04-hits-per-visit-redgreen.png` - Hits average per visit
 
@@ -191,7 +195,7 @@ What it demands: non-round two-decimal tick labels, cream background, rotated ax
 | axis scales | linear/linear | linear/linear |
 | series found | 2 | 2 |
 | mode | curve | curve |
-| reported uncertainty | - | +/-0.0475 in x, +/-0.00223 in y |
+| reported uncertainty | - | +/-0.0474 in x, +/-0.00223 in y |
 
 Warnings raised in the UI and written into the CSV header:
 
@@ -204,15 +208,14 @@ Warnings raised in the UI and written into the CSV header:
 | --- | --- | --- |
 | `01-panel1/2/3` (cropped) | pass | Abbreviated `k` labels parsed, axes within ~0.3% of full scale. Panel 2 works despite its data line lying on top of the x axis. The uncropped three-panel screenshot is correctly rejected: no single plot frame is found, and the tool says to crop rather than guessing. |
 | `02-microprocessor` | pass, with caveats | `10^n` superscript decades read, log axis detected, all five marker series separated and each landing where it was drawn, all five names read off the colour-coded legend outside the frame. Marker counts are lower than the true point counts because overlapping markers merge into one blob - expected on this chart and reported honestly as the number of points found, with the merged blobs counted separately above. The `10^3` in the Single-Thread Performance label comes back as `10%`: the recogniser flattens the superscript, the name is editable, and no number depends on it. |
-| `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the endpoint annotations `12`, `20`, `46`, `36` are rejected on shape, not colour. The extracted endpoints land within 0.8% of full scale of the values the chart prints. The percent unit is picked up from the single label that carries it. The x axis reads 1969 rather than 1970 because the final `2021` label is right-aligned to the plot edge rather than centred on its tick, which pulls the fit by about one year; the anchors are editable and the residual warning fires. |
+| `03-women-men-percent` | pass | Both series traced end to end; the in-plot words `Women` and `Men` and the endpoint annotations `12`, `20`, `46`, `36` are rejected on shape, not colour. The extracted endpoints land within 0.8% of full scale of the values the chart prints. The percent unit is picked up from the single label that carries it. The `2021` label at the right edge of the x axis is a misprint for `2020` on the chart's own decade grid, so the leave-one-out drop added to the robust fit discards it as an outlier and the x axis now reads 1969.2 instead of 1969 - still off, but by a fraction of a label width rather than a whole year, and the warning tells the reader why. |
 | `04-hits-per-visit` | pass | Non-round two-decimal tick labels handled by the least-squares fit; the two labels OCR misread are discarded and reported. Cream background and rotated axis title cause no trouble. |
-| `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain's own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 5.5 px wide and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink: the automatic point count proposes 235 against a true 331, and says what it counted. Spike amplitude recovered rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the mean peak shortfall fell from 4.30% of full scale to 0.01%. |
+| `05-retail-sales-monthly` | pass | The chart the peak clipping was found on, cropped from the captain's own screenshot. Both axes read off the tick labels to within a pixel. The line is drawn about 4-5 px wide and plots a point every 3.5 px, so its individual monthly vertices are not all separable from the ink. Spike amplitude recovered rose from 65.8% of the drawn amplitude before the apex correction to the figure in the table above, and the mean peak shortfall fell from 4.30% of full scale to under 0.1%. The widened apex-detection reach catches the plateau-topped spikes (several adjacent columns at the same top row), so the worst single peak lands within one stroke of the drawn tip and `test/retail-sales-peaks.test.ts` asserts it. |
 
 ## Known limits
 
 - **Overlapping markers merge.** Marker mode returns one centroid per connected blob, so a dense scatter reports fewer points than were plotted. The count shown is the count found, never an extrapolation.
 - **OCR misreads small labels.** Below about 8 px of text height the recogniser drops or confuses digits. The least-squares fit absorbs the ones it catches and reports the ones it discards, but the defence against a systematic misread is the editable anchors, not the OCR.
-- **An end label aligned to the plot edge biases the fit** by roughly half a label width, as in `03`. The residual warning fires; the fix is to drag the anchor.
 - **A curve that doubles back in x** cannot be represented by one value per column. The trace follows the branch that continues from the previous column and does not report the other.
 - **Line and marker drawn together** merge into one component, so the tool traces the curve rather than returning the marker positions. That is the honest reading of the ink, and the CSV says so.
 - **The worst individual spike is read lower than the average one.** On the retail-sales chart the mean spike recovers about 95% of its drawn amplitude and the median about 98%, but the worst single spike recovers about half. Those are the spikes whose neighbours are close enough that the ink merges, leaving no separate tip to find.

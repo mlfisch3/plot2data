@@ -386,6 +386,43 @@ body {
   background: var(--surface-2);
 }
 
+/* Candidate-plot chips shown above the stage bar when the detector found
+   more than one plot in the uncropped image. The user can pick between
+   them without redrawing the crop handles. */
+.candidate-strip {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.candidate-strip .hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+
+.candidate-strip .chip {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.candidate-strip .chip.is-active {
+  background: var(--accent, #228be6);
+  color: #fff;
+  border-color: transparent;
+}
+
 .stage-bar .filename {
   font-size: 12.5px;
   color: var(--text-dim);

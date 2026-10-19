@@ -25,6 +25,7 @@ import {
   compact,
   describeAxis,
   describeUncertainty,
+  detectPlotCandidates,
   formatValue,
   readLegendLabels,
   suggestPointCount,
@@ -39,6 +40,7 @@ import {
   type DelimiterName,
   type ExtractionMode,
   type ImageBuffer,
+  type PlotCandidate,
   type Rect,
   type SamplingSuggestion,
 } from './engine/index.ts';
@@ -100,6 +102,12 @@ interface State {
   choices: IncomingImage[];
   /** Id of the shared image the shell holds, so a restart can restore it. */
   token: string | null;
+  /**
+   * Plot rectangles the detector saw in the loaded image. Empty on a cropped-
+   * to-one-plot image where the detector collapses to a single candidate.
+   * More than one entry is a multipanel composite; the user picks which.
+   */
+  plotCandidates: PlotCandidate[];
 }
 
 const state: State = {
@@ -124,7 +132,7 @@ const state: State = {
   readLabels: 'auto',
   delimiter: 'comma',
   withHeader: true,
-  imageOpacity: 0.45,
+  imageOpacity: 0.55,
   pointRadius: 1,
   magnify: false,
   linkZoom: true,
@@ -132,6 +140,7 @@ const state: State = {
   error: null,
   choices: [],
   token: null,
+  plotCandidates: [],
 };
 
 const ocr = new BrowserOcr();
@@ -159,6 +168,8 @@ app.innerHTML = `
           <span class="panel-note">Drag X1, X2, Y1 and Y2 onto ticks you can name.</span>
         </header>
         <canvas id="stage" aria-label="Plot image with crop and calibration overlay"></canvas>
+        <div class="candidate-strip" id="candidate-strip" hidden
+          aria-label="Plots the detector found in this image"></div>
         <div class="stage-bar">
           <span class="filename" id="filename"></span>
           <span class="zoomer" id="zoomer" hidden>
@@ -194,13 +205,14 @@ app.innerHTML = `
         <div class="panel-canvas"><canvas id="overlay" aria-label="The extracted data drawn over the original image"></canvas></div>
         <div class="panel-tools">
           <label for="opacity">Image</label>
-          <input type="range" id="opacity" min="0" max="100" step="5" value="45"
+          <input type="range" id="opacity" min="0" max="100" step="5" value="55"
             aria-label="Original image opacity" />
           <label for="point-size">Point size</label>
           <input type="range" id="point-size" min="0" max="2.5" step="0.1" value="1"
             aria-label="Point marker size" />
           <label class="check-row"><input type="checkbox" id="magnify" /> Magnifier</label>
           <button id="overlay-fit">Fit</button>
+          <button id="overlay-save">Save overlay as PNG</button>
         </div>
       </section>
 
@@ -369,6 +381,7 @@ function clearImage(): void {
   state.token = null;
   state.fileName = '';
   state.choices = [];
+  state.plotCandidates = [];
   state.suggestion = null;
   forgetSession();
   stage.setImage(null, null);
@@ -544,7 +557,13 @@ async function accept(file: File, incoming?: IncomingImage): Promise<void> {
     state.fullBitmap = loaded.bitmap;
     state.fileName = loaded.name;
     state.token = incoming?.token ?? null;
-    state.crop = clampCrop(restored?.crop, loaded.buffer);
+    // Plot detection runs first so the restored crop can override it. On a
+    // cropped-to-one-plot image this returns one candidate the detector landed
+    // on the frame; on a multipanel composite it returns one per panel and the
+    // user picks via the chip strip under the crop controls.
+    state.plotCandidates = detectPlotCandidates(loaded.buffer);
+    const detected = pickAutoCandidate(state.plotCandidates, loaded.buffer);
+    state.crop = clampCrop(restored?.crop ?? detected?.rect, loaded.buffer);
     if (restored) {
       state.modeOverride = restored.modeOverride;
       state.readLabels = restored.readLabels ?? 'auto';
@@ -568,6 +587,30 @@ async function accept(file: File, incoming?: IncomingImage): Promise<void> {
     state.choices = [];
     render();
   }
+}
+
+/**
+ * Pick the candidate to auto-select, or null to let the user see the whole image.
+ *
+ * The brief says to auto-select a single high-confidence candidate and present
+ * the alternatives otherwise. "High confidence" here means a comfortable margin
+ * over the next entry: the detector sometimes reports a legend box or an inset
+ * table as a second candidate, and silently picking the top one is only safe
+ * when nothing else is a close contender.
+ */
+function pickAutoCandidate(
+  cands: readonly PlotCandidate[],
+  image: ImageBuffer,
+): PlotCandidate | null {
+  if (cands.length === 0) return null;
+  const top = cands[0];
+  // Reject tiny candidates (<10% of the image area): a label block or a title
+  // bar can look like a label-only frame and we would rather fall back to the
+  // whole image than crop to a sliver. On a true multipanel image each panel
+  // is well over that floor.
+  const area = (top.rect.x1 - top.rect.x0) * (top.rect.y1 - top.rect.y0);
+  if (area < image.width * image.height * 0.1) return null;
+  return top;
 }
 
 /** A crop restored from a previous run has to still fit the image it is applied to. */
@@ -664,6 +707,31 @@ boxZoomBtn.addEventListener('click', () => {
     : 'Drag to pan, pinch or scroll to zoom.';
 });
 document.getElementById('overlay-fit')!.addEventListener('click', () => overlay.viewport.resetView());
+
+document.getElementById('overlay-save')!.addEventListener('click', async () => {
+  const blob = await overlay.saveToBlob('image/png');
+  if (!blob) return;
+  // On Android we route through the shell's native file-save flow; in the
+  // browser a plain anchor is enough and avoids a round trip through the
+  // host bridge.
+  const name = exportName('overlay.png');
+  if (onAndroid) {
+    const buffer = await blob.arrayBuffer();
+    await exportFile('save', name, new Uint8Array(buffer), 'image/png');
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+});
 
 const linkBox = document.getElementById('link-zoom') as HTMLInputElement;
 linkBox.addEventListener('change', () => {
@@ -902,6 +970,48 @@ function exportName(extension: string): string {
   return `${state.fileName.replace(/\.[^.]+$/, '') || 'plot'}-data.${extension}`;
 }
 
+/**
+ * Show the alternative plot rectangles the detector found.
+ *
+ * One chip per candidate under the stage. Clicking one sets the crop to that
+ * rectangle, so the user can switch between the three panels of a multipanel
+ * composite without redrawing the handles from scratch. The chip strip is
+ * hidden on a single-candidate image because there is nothing to pick between.
+ */
+function renderCandidateStrip(): void {
+  const strip = document.getElementById('candidate-strip');
+  if (!strip) return;
+  const cands = state.plotCandidates;
+  if (state.phase !== 'cropping' || cands.length < 2) {
+    strip.hidden = true;
+    strip.innerHTML = '';
+    return;
+  }
+  strip.hidden = false;
+  const matched = cands.findIndex(
+    (c) => state.crop && Math.abs(c.rect.x0 - state.crop.x0) < 4 && Math.abs(c.rect.x1 - state.crop.x1) < 4,
+  );
+  strip.innerHTML =
+    `<span class="hint">Found ${cands.length} plots in this image:</span>` +
+    cands
+      .map(
+        (_c, i) =>
+          `<button type="button" class="chip${i === matched ? ' is-active' : ''}" data-plot="${i}">Plot ${i + 1}</button>`,
+      )
+      .join('');
+  for (const btn of Array.from(strip.querySelectorAll<HTMLButtonElement>('[data-plot]'))) {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.plot);
+      const picked = cands[idx];
+      if (!picked || !state.full) return;
+      state.crop = clampCrop(picked.rect, state.full);
+      stage.setImage(state.fullBitmap, state.crop);
+      scheduleSave();
+      render();
+    });
+  }
+}
+
 /* ----------------------------------------------------------------- render */
 
 function render(): void {
@@ -910,6 +1020,7 @@ function render(): void {
   extractBtn.hidden = state.phase !== 'cropping';
   extractBtn.disabled = state.phase === 'working';
   recropBtn.hidden = state.phase !== 'ready';
+  renderCandidateStrip();
   fitBtn.hidden = !stage.zoomed;
   zoomer.hidden = state.phase !== 'ready';
   stageHead.hidden = state.phase !== 'ready';

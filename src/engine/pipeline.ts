@@ -10,6 +10,7 @@ import { detectFrame, type FrameOptions } from './frame.ts';
 import { detectTicks, type TickOptions, type TickScan } from './ticks.ts';
 import { readOffsetAnnotations, readTickLabels, axisUnit, type OcrProvider } from './labels.ts';
 import { readLegendLabels, type LegendLabel } from './legend.ts';
+import { readTextAnnotations, type TextAnnotations } from './text-annotations.ts';
 import { calibrateAxis, isValid } from './calibration.ts';
 import {
   buildMask,
@@ -117,6 +118,8 @@ export interface Analysis {
   series: AnalysedSeries[];
   /** Legend text matched to a series by colour. Cosmetic; see `legend.ts`. */
   legend: LegendLabel[];
+  /** Chart title and axis titles OCR'd from text outside the plot frame. */
+  textAnnotations: TextAnnotations;
   /** Calibration pre-filled from OCR; every field is user-editable. */
   calibration: Calibration;
   units: { x?: string; y?: string };
@@ -364,6 +367,18 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
       : [];
   for (const label of legend) series[label.index].label = label;
 
+  // Chart title, axis titles, units. Cosmetic: these only reach the export
+  // header and never change a number.
+  const textAnnotations = await readTextAnnotations(
+    img,
+    frame,
+    xScan.labelBand,
+    yScan.labelBand,
+    ocr,
+  );
+  if (textAnnotations.xUnit && !units.x) units.x = textAnnotations.xUnit;
+  if (textAnnotations.yUnit && !units.y) units.y = textAnnotations.yUnit;
+
   return {
     width: img.width,
     height: img.height,
@@ -376,6 +391,7 @@ export async function analyse(img: ImageBuffer, options: AnalyseOptions = {}): P
     candidates,
     series,
     legend,
+    textAnnotations,
     calibration,
     units,
     warnings,
